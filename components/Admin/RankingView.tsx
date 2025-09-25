@@ -1,11 +1,42 @@
 import React, { useState, useEffect, useMemo, useCallback } from 'react';
-import { getReportsByEvent, getParticipantCompaniesByEvent, getButtonConfigs, getStaffByEvent, getStaffActivity, getEventSalesData, getSoldVehiclesByEvent } from '../../services/api';
-import { ReportSubmission, ParticipantCompany, ReportButtonConfig, Staff, StaffActivity, CompanySalesData, Collaborator, Vehicle } from '../../types';
+import { getReportsByEvent, getParticipantCompaniesByEvent, getButtonConfigs, getStaffByEvent, getStaffActivity, getDetailedSalesByEvent } from '../../services/api';
+import { ReportSubmission, ParticipantCompany, ReportButtonConfig, Staff, StaffActivity } from '../../types';
 import LoadingSpinner from '../LoadingSpinner';
 import Button from '../Button';
+import Input from '../Input';
 
 // Tell TypeScript that jspdf is loaded globally from the CDN
 declare const jspdf: any;
+
+// FIX: Define a specific type for detailed sales data to resolve multiple 'unknown' type errors.
+interface DetailedSale {
+  marca: string;
+  model: string;
+  placa?: string;
+  updatedAt: string;
+  company: {
+    id: string;
+    name: string;
+    logoUrl?: string;
+  } | null;
+  collaborator: {
+    id: string;
+    name: string;
+    photoUrl?: string;
+    collaboratorCode: string;
+  } | null;
+}
+
+// FIX: Define a specific type for ranked seller data to resolve multiple 'unknown' type errors.
+interface RankedSeller {
+    id: string;
+    name: string;
+    photoUrl?: string;
+    collaboratorCode: string;
+    companyName: string;
+    companyId: string;
+    salesCount: number;
+}
 
 interface Props {
   eventId: string;
@@ -46,30 +77,30 @@ const RankingView: React.FC<Props> = ({ eventId }) => {
   const [buttonConfigs, setButtonConfigs] = useState<ReportButtonConfig[]>([]);
   const [staffList, setStaffList] = useState<Staff[]>([]);
   const [activities, setActivities] = useState<Record<string, StaffActivity[]>>({});
-  const [salesData, setSalesData] = useState<CompanySalesData[]>([]);
-  const [soldVehicles, setSoldVehicles] = useState<Pick<Vehicle, 'model' | 'marca'>[]>([]);
+  // FIX: Use the specific DetailedSale type for state to ensure type safety.
+  const [detailedSales, setDetailedSales] = useState<DetailedSale[]>([]);
   const [loading, setLoading] = useState(true);
-  const [view, setView] = useState<'visits' | 'occurrences' | 'staff' | 'salesByCompany' | 'salesBySeller' | 'salesMap'>('visits');
+  const [view, setView] = useState<'visits' | 'occurrences' | 'staff' | 'salesByCompany' | 'salesBySeller' | 'salesMap'>('salesByCompany');
   const [selectedOccurrence, setSelectedOccurrence] = useState<string | null>(null);
   const [sellerCompanyFilter, setSellerCompanyFilter] = useState('all');
+  const [csvLoading, setCsvLoading] = useState(false);
+  const [dateFilter, setDateFilter] = useState<string>('');
 
   const fetchData = useCallback(async () => {
     setLoading(true);
     try {
-      const [reportsData, companiesData, buttonsData, staffData, eventSalesData, soldVehiclesData] = await Promise.all([
+      const [reportsData, companiesData, buttonsData, staffData, detailedSalesData] = await Promise.all([
         getReportsByEvent(eventId),
         getParticipantCompaniesByEvent(eventId),
         getButtonConfigs(),
         getStaffByEvent(eventId),
-        getEventSalesData(eventId),
-        getSoldVehiclesByEvent(eventId)
+        getDetailedSalesByEvent(eventId),
       ]);
       setReports(reportsData.sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime()));
       setCompanies(companiesData);
       setButtonConfigs(buttonsData);
       setStaffList(staffData);
-      setSalesData(eventSalesData);
-      setSoldVehicles(soldVehiclesData);
+      setDetailedSales(detailedSalesData);
 
       if (staffData.length > 0) {
         const activityPromises = staffData.map(s => getStaffActivity(s.id, eventId));
@@ -92,6 +123,30 @@ const RankingView: React.FC<Props> = ({ eventId }) => {
     fetchData();
   }, [fetchData]);
 
+  const isSameDay = (dateString: string, filterDate: string) => {
+    if (!dateString || !filterDate) return false;
+    return dateString.startsWith(filterDate);
+  };
+
+  const filteredReports = useMemo(() => {
+    if (!dateFilter) return reports;
+    return reports.filter(r => isSameDay(r.timestamp, dateFilter));
+  }, [reports, dateFilter]);
+
+  const filteredActivities = useMemo(() => {
+    if (!dateFilter) return activities;
+    const filtered: Record<string, StaffActivity[]> = {};
+    for (const staffId in activities) {
+      filtered[staffId] = activities[staffId].filter(a => isSameDay(a.timestamp, dateFilter));
+    }
+    return filtered;
+  }, [activities, dateFilter]);
+
+  const filteredDetailedSales = useMemo(() => {
+    if (!dateFilter) return detailedSales;
+    return detailedSales.filter(s => isSameDay(s.updatedAt, dateFilter));
+  }, [detailedSales, dateFilter]);
+
   const companyInfoMap = useMemo(() => {
     return companies.reduce((acc, company) => {
       acc[company.boothCode] = { name: company.name, logoUrl: company.logoUrl };
@@ -107,7 +162,7 @@ const RankingView: React.FC<Props> = ({ eventId }) => {
   }, [buttonConfigs]);
 
   const visitsData: ChartData[] = useMemo(() => {
-    const counts = reports.reduce((acc, report) => {
+    const counts = filteredReports.reduce((acc, report) => {
       acc[report.boothCode] = (acc[report.boothCode] || 0) + 1;
       return acc;
     }, {} as Record<string, number>);
@@ -119,11 +174,10 @@ const RankingView: React.FC<Props> = ({ eventId }) => {
         logoUrl: companyInfoMap[boothCode]?.logoUrl,
       }))
       .sort((a, b) => b.value - a.value);
-  }, [reports, companyInfoMap]);
+  }, [filteredReports, companyInfoMap]);
 
   const occurrencesData: ChartData[] = useMemo(() => {
-    const counts = reports.reduce((acc, report) => {
-      // Ignora configs internas no ranking de ocorrências visíveis
+    const counts = filteredReports.reduce((acc, report) => {
       if (report.reportLabel.startsWith('__') && report.reportLabel.endsWith('__')) {
         return acc;
       }
@@ -137,41 +191,79 @@ const RankingView: React.FC<Props> = ({ eventId }) => {
         value,
       }))
       .sort((a, b) => b.value - a.value);
-  }, [reports]);
+  }, [filteredReports]);
   
   const staffData: ChartData[] = useMemo(() => {
     return staffList
       .map(staff => ({
         label: staff.name,
-        value: (activities[staff.id] || []).length,
+        value: (filteredActivities[staff.id] || []).length,
         logoUrl: staff.photoUrl,
       }))
       .filter(item => item.value > 0)
       .sort((a, b) => b.value - a.value);
-  }, [staffList, activities]);
+  }, [staffList, filteredActivities]);
 
-  const rankedCompaniesBySales = useMemo(() => {
-    return [...salesData].sort((a, b) => b.salesCount - a.salesCount);
-  }, [salesData]);
+    const totalSalesCount = useMemo(() => filteredDetailedSales.length, [filteredDetailedSales]);
 
-  const rankedSellers = useMemo(() => {
-    const allSellers = salesData.flatMap(company => company.collaborators);
-    const filtered = sellerCompanyFilter === 'all'
-      ? allSellers
-      : allSellers.filter(seller => seller.companyId === sellerCompanyFilter);
-    
-    return filtered
-        .filter(seller => seller.salesCount > 0)
-        .sort((a, b) => b.salesCount - a.salesCount);
-  }, [salesData, sellerCompanyFilter]);
+    const rankedCompaniesBySales = useMemo(() => {
+        const salesByCompany = filteredDetailedSales.reduce((acc, sale) => {
+            const companyId = sale.company?.id;
+            if (companyId) {
+                acc[companyId] = (acc[companyId] || 0) + 1;
+            }
+            return acc;
+        }, {} as Record<string, number>);
+
+        const companyMap = new Map(companies.map(c => [c.id, c]));
+
+        return Object.entries(salesByCompany)
+            .map(([companyId, count]) => {
+                const company = companyMap.get(companyId);
+                return {
+                    id: companyId,
+                    name: company?.name || 'Empresa Desconhecida',
+                    salesCount: count,
+                    logoUrl: company?.logoUrl
+                };
+            })
+            .sort((a, b) => b.salesCount - a.salesCount);
+    }, [filteredDetailedSales, companies]);
+
+    const rankedSellers = useMemo(() => {
+        const salesByCollaborator = filteredDetailedSales.reduce((acc, sale) => {
+            if (sale.collaborator?.id) {
+                const collabId = sale.collaborator.id;
+                if (!acc[collabId]) {
+                    acc[collabId] = {
+                        ...sale.collaborator,
+                        companyName: sale.company?.name || 'N/A',
+                        companyId: sale.company?.id || 'N/A',
+                        salesCount: 0,
+                    };
+                }
+                acc[collabId].salesCount++;
+            }
+            return acc;
+        // FIX: Provide a specific type for the reduce accumulator to avoid 'any'/'unknown' types.
+        }, {} as Record<string, RankedSeller>);
+
+        const allSellers = Object.values(salesByCollaborator);
+
+        const filtered = sellerCompanyFilter === 'all'
+          ? allSellers
+          : allSellers.filter(seller => seller.companyId === sellerCompanyFilter);
+        
+        return filtered.sort((a, b) => b.salesCount - a.salesCount);
+    }, [filteredDetailedSales, sellerCompanyFilter]);
 
   const maxSellerValue = useMemo(() => {
     return Math.max(...rankedSellers.map(s => s.salesCount), 0);
   }, [rankedSellers]);
   
   const salesMapData = useMemo(() => {
-    const counts = soldVehicles.reduce((acc, vehicle) => {
-        const modelName = vehicle.model || vehicle.marca || 'Desconhecido';
+    const counts = filteredDetailedSales.reduce((acc, sale) => {
+        const modelName = sale.model || sale.marca || 'Desconhecido';
         acc[modelName] = (acc[modelName] || 0) + 1;
         return acc;
     }, {} as Record<string, number>);
@@ -179,12 +271,7 @@ const RankingView: React.FC<Props> = ({ eventId }) => {
     return Object.entries(counts)
         .map(([label, value]) => ({ label, value }))
         .sort((a, b) => b.value - a.value);
-  }, [soldVehicles]);
-
-  const detailedReportsForSelectedOccurrence = useMemo(() => {
-      if (!selectedOccurrence) return [];
-      return reports.filter(r => r.reportLabel === selectedOccurrence);
-  }, [reports, selectedOccurrence]);
+  }, [filteredDetailedSales]);
 
   const handleDownloadOccurrencesPdf = (occurrenceLabels: string[]) => {
     if (occurrenceLabels.length === 0) return;
@@ -199,7 +286,7 @@ const RankingView: React.FC<Props> = ({ eventId }) => {
     doc.text(`Data de Geração: ${new Date().toLocaleString('pt-BR')}`, 14, 30);
     
     occurrenceLabels.forEach((label, index) => {
-      const reportsForOccurrence = reports.filter(r => r.reportLabel === label);
+      const reportsForOccurrence = filteredReports.filter(r => r.reportLabel === label);
       if (reportsForOccurrence.length === 0) return;
 
       if (index > 0) {
@@ -324,6 +411,53 @@ const RankingView: React.FC<Props> = ({ eventId }) => {
     doc.save('relatorio_vendas_modelo.pdf');
   };
 
+    const handleDownloadSalesCsv = () => {
+        setCsvLoading(true);
+        try {
+            if (filteredDetailedSales.length === 0) {
+                alert('Não há dados de vendas para exportar.');
+                return;
+            }
+
+            const headers = [
+                "Veículo (Marca)",
+                "Veículo (Modelo)",
+                "Placa",
+                "Loja",
+                "Vendedor",
+                "Data da Venda"
+            ];
+
+            const rows = filteredDetailedSales.map(sale => [
+                sale.marca,
+                sale.model,
+                sale.placa || 'N/D',
+                sale.company?.name || 'N/A',
+                sale.collaborator?.name || 'N/A',
+                new Date(sale.updatedAt).toLocaleString('pt-BR')
+            ]);
+
+            const csv = (window as any).Papa.unparse({
+                fields: headers,
+                data: rows
+            });
+
+            const blob = new Blob([`\uFEFF${csv}`], { type: 'text/csv;charset=utf-8;' });
+            const link = document.createElement("a");
+            const url = URL.createObjectURL(blob);
+            link.setAttribute("href", url);
+            link.setAttribute("download", "relatorio_vendas_detalhado.csv");
+            document.body.appendChild(link);
+            link.click();
+            document.body.removeChild(link);
+        } catch (error) {
+            console.error("Failed to download CSV:", error);
+            alert('Ocorreu um erro ao gerar o relatório CSV.');
+        } finally {
+            setCsvLoading(false);
+        }
+    };
+
   const chartData = useMemo(() => {
     switch (view) {
       case 'visits':
@@ -389,68 +523,95 @@ const RankingView: React.FC<Props> = ({ eventId }) => {
           Vendas por Modelo
         </Button>
       </div>
+      
+      <div className="mb-6 bg-secondary p-4 rounded-lg text-center">
+          <h4 className="text-lg font-semibold text-text-secondary">Total de Vendas {dateFilter ? `em ${new Date(dateFilter + 'T12:00:00').toLocaleDateString('pt-BR')}` : ''}</h4>
+          <p className="text-4xl font-bold text-primary">{totalSalesCount}</p>
+      </div>
 
       <div>
-        <div className="flex justify-between items-center mb-4">
+        <div className="flex flex-col md:flex-row justify-between items-start md:items-center mb-4 gap-4">
           <h3 className="text-xl font-semibold text-primary">{chartTitle}</h3>
-          {view === 'occurrences' && chartData.length > 0 && (
-            <Button
-              variant="secondary"
-              onClick={() => handleDownloadOccurrencesPdf(occurrencesData.map(o => o.label))}
-              className="text-sm py-1 px-3 flex items-center"
-            >
-              <DownloadIcon />
-              Download Todas
-            </Button>
-          )}
-          {view === 'visits' && chartData.length > 0 && (
-            <Button
-              variant="secondary"
-              onClick={handleDownloadVisitsPdf}
-              className="text-sm py-1 px-3 flex items-center"
-            >
-              <DownloadIcon />
-              Download PDF
-            </Button>
-          )}
-          {view === 'staff' && chartData.length > 0 && (
-            <Button
-              variant="secondary"
-              onClick={handleDownloadStaffPdf}
-              className="text-sm py-1 px-3 flex items-center"
-            >
-              <DownloadIcon />
-              Download PDF
-            </Button>
-          )}
-          {view === 'salesMap' && salesMapData.length > 0 && (
-            <Button
-              variant="secondary"
-              onClick={handleDownloadSalesMapPdf}
-              className="text-sm py-1 px-3 flex items-center"
-            >
-              <DownloadIcon />
-              Download PDF
-            </Button>
-          )}
+          <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-4 w-full md:w-auto">
+            <div className="flex items-center gap-2">
+                <Input
+                    id="date-filter"
+                    type="date"
+                    label=""
+                    value={dateFilter}
+                    onChange={(e) => setDateFilter(e.target.value)}
+                    className="px-3 py-1.5 border border-border rounded-md bg-background text-text-secondary focus:outline-none focus:ring-2 focus:ring-primary h-10 mb-0"
+                />
+                <Button variant="secondary" onClick={() => setDateFilter('')} className="text-sm py-2 px-3">Limpar</Button>
+            </div>
+            {view === 'occurrences' && chartData.length > 0 && (
+              <Button
+                variant="secondary"
+                onClick={() => handleDownloadOccurrencesPdf(occurrencesData.map(o => o.label))}
+                className="text-sm py-2 px-3 flex items-center justify-center"
+              >
+                <DownloadIcon />
+                Download Todas
+              </Button>
+            )}
+            {view === 'visits' && chartData.length > 0 && (
+              <Button
+                variant="secondary"
+                onClick={handleDownloadVisitsPdf}
+                className="text-sm py-2 px-3 flex items-center justify-center"
+              >
+                <DownloadIcon />
+                Download PDF
+              </Button>
+            )}
+            {view === 'staff' && chartData.length > 0 && (
+              <Button
+                variant="secondary"
+                onClick={handleDownloadStaffPdf}
+                className="text-sm py-2 px-3 flex items-center justify-center"
+              >
+                <DownloadIcon />
+                Download PDF
+              </Button>
+            )}
+            {view === 'salesMap' && salesMapData.length > 0 && (
+              <Button
+                variant="secondary"
+                onClick={handleDownloadSalesMapPdf}
+                className="text-sm py-2 px-3 flex items-center justify-center"
+              >
+                <DownloadIcon />
+                Download PDF
+              </Button>
+            )}
+            {(view === 'salesByCompany' || view === 'salesBySeller' || view === 'salesMap') && (
+                <Button
+                    variant="secondary"
+                    onClick={handleDownloadSalesCsv}
+                    disabled={csvLoading}
+                    className="text-sm py-2 px-3 flex items-center min-w-[150px] justify-center"
+                >
+                    {csvLoading ? (
+                        <div className="flex justify-center items-center h-5">
+                            <div className="animate-spin rounded-full h-5 w-5 border-b-2 border-text"></div>
+                        </div>
+                    ) : (
+                        <>
+                            <DownloadIcon />
+                            Download CSV
+                        </>
+                    )}
+                </Button>
+            )}
+          </div>
         </div>
 
         {(view === 'visits' || view === 'occurrences' || view === 'staff') && (
             chartData.length > 0 ? (
                 <div className="space-y-2">
                     {chartData.map((item, index) => {
-                        const isClickable = view === 'occurrences';
-                        const isSelected = selectedOccurrence === item.label;
-                        const WrapperComponent = isClickable ? 'button' : 'div';
-                        const wrapperProps = isClickable ? { 
-                            onClick: () => setSelectedOccurrence(prev => prev === item.label ? null : item.label),
-                            className: `w-full text-left p-0 rounded-lg transition-colors ${isSelected ? 'bg-secondary' : 'hover:bg-secondary/50'}`
-                        } : {
-                            className: "w-full"
-                        };
-
                         return (
-                            <WrapperComponent key={index} {...wrapperProps}>
+                            <div key={index} className="w-full">
                                 <div className={`flex items-center gap-4 group w-full p-2`}>
                                     <span className="text-right font-semibold text-text-secondary w-10">{index + 1}º</span>
                                     {view === 'visits' && (
@@ -483,13 +644,13 @@ const RankingView: React.FC<Props> = ({ eventId }) => {
                                         </div>
                                     </div>
                                 </div>
-                            </WrapperComponent>
+                            </div>
                         );
                     })}
                 </div>
             ) : (
             <div className="text-center py-10">
-                <p className="text-text-secondary">Nenhum dado para exibir.</p>
+                <p className="text-text-secondary">Nenhum dado para exibir com os filtros atuais.</p>
             </div>
             )
         )}
@@ -517,7 +678,7 @@ const RankingView: React.FC<Props> = ({ eventId }) => {
                         </div>
                     ))}
                     </div>
-                ) : <p className="text-center text-text-secondary py-4">Nenhuma venda registrada no evento.</p>}
+                ) : <p className="text-center text-text-secondary py-4">Nenhuma venda registrada com os filtros atuais.</p>}
             </div>
         )}
         
@@ -530,7 +691,7 @@ const RankingView: React.FC<Props> = ({ eventId }) => {
                         className="w-full sm:w-auto px-3 py-2 border border-border rounded-md bg-background focus:outline-none focus:ring-2 focus:ring-primary"
                     >
                         <option value="all">Todas as Empresas</option>
-                        {salesData.filter(c => c.salesCount > 0).map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
+                        {rankedCompaniesBySales.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
                     </select>
                 </div>
                  {rankedSellers.length > 0 ? (
@@ -598,42 +759,6 @@ const RankingView: React.FC<Props> = ({ eventId }) => {
         )}
       </div>
 
-      {view === 'occurrences' && selectedOccurrence && (
-        <div className="mt-8 pt-6 border-t border-border animate-fade-in">
-            <div className="flex justify-between items-center mb-4">
-              <h3 className="text-2xl font-bold">Respostas Detalhadas</h3>
-              <Button
-                variant="secondary"
-                onClick={() => handleDownloadOccurrencesPdf([selectedOccurrence])}
-                className="text-sm py-1 px-3 flex items-center"
-              >
-                <DownloadIcon />
-                Download PDF
-              </Button>
-            </div>
-            <div className="max-h-[70vh] overflow-y-auto space-y-4 pr-2 custom-scrollbar">
-            {detailedReportsForSelectedOccurrence.map(report => (
-                <div key={report.id} className="bg-secondary p-4 rounded-lg border border-border/50">
-                    <p className="font-semibold text-text mb-2">{questionMap[report.reportLabel] || report.reportLabel}</p>
-                    <div className="flex items-start gap-3">
-                        <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5 text-primary flex-shrink-0 mt-0.5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 8h2a2 2 0 012 2v6a2 2 0 01-2 2h-2v4l-4-4H9a2 2 0 01-2-2V7a2 2 0 012-2h4l2-2h2l-2 2z" /></svg>
-                        <p className="text-text flex-1">
-                            {report.response}
-                        </p>
-                    </div>
-
-                    <div className="text-xs text-text-secondary border-t border-border/50 mt-3 pt-2 flex flex-wrap justify-between items-center gap-2">
-                        <div>
-                            <p><strong>Estande:</strong> {companyInfoMap[report.boothCode]?.name || report.boothCode}</p>
-                            <p><strong>Equipe:</strong> {report.staffName}</p>
-                        </div>
-                        <p className="font-medium text-right">{new Date(report.timestamp).toLocaleString('pt-BR')}</p>
-                    </div>
-                </div>
-            ))}
-            </div>
-        </div>
-      )}
       <style>{`
         .custom-scrollbar::-webkit-scrollbar {
             width: 8px;

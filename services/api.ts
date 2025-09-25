@@ -474,6 +474,39 @@ export const getSoldVehiclesByEvent = async (eventId: string): Promise<Pick<Vehi
     return camelCaseKeys(vehicles) as Pick<Vehicle, 'model' | 'marca'>[];
 };
 
+export const getDetailedSalesByEvent = async (eventId: string): Promise<any[]> => {
+    const { data: companies, error: companiesError } = await supabase
+        .from('participant_companies')
+        .select('id')
+        .eq('event_id', eventId);
+
+    if (companiesError || !companies || companies.length === 0) {
+        return [];
+    }
+    const companyIds = companies.map(c => c.id);
+
+    const { data, error } = await supabase
+        .from('vehicle_stock')
+        .select(`
+            marca,
+            model,
+            placa,
+            updated_at,
+            company:participant_companies (id, name, logo_url),
+            collaborator:collaborators (id, name, photo_url, collaborator_code)
+        `)
+        .in('company_id', companyIds)
+        .eq('status', 'Vendido')
+        .not('sold_by_collaborator_id', 'is', null);
+
+    if (error) {
+        console.error("Error fetching detailed sales data:", error);
+        throw new Error('Falha ao buscar dados detalhados de vendas.');
+    }
+
+    return camelCaseKeys(data);
+};
+
 
 // --- Generic CRUD functions replaced with specific Supabase calls ---
 
