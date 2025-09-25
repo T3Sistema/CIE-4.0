@@ -1,4 +1,6 @@
 
+
+
 import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { 
@@ -25,9 +27,11 @@ import {
     getPendingCompanyCallsForStaff,
     resolveCompanyCall,
     getPendingTelaoRequestsForEvent,
-    resolveTelaoRequest
+    resolveTelaoRequest,
+    getCollaboratorsByCompany,
+    sendTelaoNotification
 } from '../services/api';
-import { ReportButtonConfig, ReportType, Department, Staff, AssignedTask, ReportSubmission, ParticipantCompany, StaffActivity, Vehicle, StockMovement, CompanyCall, TelaoRequest } from '../types';
+import { ReportButtonConfig, ReportType, Department, Staff, AssignedTask, ReportSubmission, ParticipantCompany, StaffActivity, Vehicle, StockMovement, CompanyCall, TelaoRequest, Collaborator } from '../types';
 import LoadingSpinner from '../components/LoadingSpinner';
 import Button from '../components/Button';
 import Modal from '../components/Modal';
@@ -92,15 +96,17 @@ const InformesPage: React.FC = () => {
   const [switchError, setSwitchError] = useState('');
 
   // State for Sales Check-in
-  const [salesCheckinStaffIds, setSalesCheckinStaffIds] = useState<string[]>([]);
-  const [notifyCallStaffIds, setNotifyCallStaffIds] = useState<string[]>([]);
   const [isSalesModalOpen, setIsSalesModalOpen] = useState(false);
-  const [hadSales, setHadSales] = useState<'Sim' | 'Não' | null>(null);
-  const [salesPeriod, setSalesPeriod] = useState<'Manhã' | 'Tarde' | 'Noite' | ''>('');
-  const [salesCount, setSalesCount] = useState<number>(0);
-  const [soldModels, setSoldModels] = useState<string[]>([]);
+  const [salesCollaborators, setSalesCollaborators] = useState<Collaborator[]>([]);
+  const [salesAvailableVehicles, setSalesAvailableVehicles] = useState<Vehicle[]>([]);
+  const [selectedSaleCollaboratorId, setSelectedSaleCollaboratorId] = useState<string>('');
+  const [selectedSaleVehicleId, setSelectedSaleVehicleId] = useState<string>('');
+  const [salesDataLoading, setSalesDataLoading] = useState(false);
+  const [salesVehicleSearch, setSalesVehicleSearch] = useState('');
   const [salesSubmitting, setSalesSubmitting] = useState(false);
   const [salesSubmitStatus, setSalesSubmitStatus] = useState<'idle' | 'success' | 'error'>('idle');
+  // FIX: Declare state to store staff IDs with permission for sales check-in.
+  const [salesCheckinStaffIds, setSalesCheckinStaffIds] = useState<string[]>([]);
 
   // State for Notification Call
   const [isNotificationModalOpen, setIsNotificationModalOpen] = useState(false);
@@ -108,6 +114,8 @@ const InformesPage: React.FC = () => {
   const [selectedNotificationDeptId, setSelectedNotificationDeptId] = useState<string | null>(null);
   const [selectedNotificationStaff, setSelectedNotificationStaff] = useState<Staff | null>(null);
   const [notificationReason, setNotificationReason] = useState('');
+  // FIX: Declare state to store staff IDs with permission for notify calls.
+  const [notifyCallStaffIds, setNotifyCallStaffIds] = useState<string[]>([]);
 
   // State for Assigned Tasks
   const [pendingTasks, setPendingTasks] = useState<AssignedTask[]>([]);
@@ -422,63 +430,102 @@ const InformesPage: React.FC = () => {
     }
   };
 
-  const openSalesCheckinModal = () => {
-    setHadSales(null);
-    setSalesPeriod('');
-    setSalesCount(0);
-    setSoldModels([]);
-    setSalesSubmitStatus('idle');
+  const openSalesCheckinModal = async () => {
+    if (!checkinInfo) return;
     setIsSalesModalOpen(true);
+    setSalesDataLoading(true);
+    setSalesSubmitStatus('idle');
+    setSelectedSaleCollaboratorId('');
+    setSelectedSaleVehicleId('');
+    setSalesVehicleSearch('');
+    try {
+        const [collaboratorsData, vehiclesData] = await Promise.all([
+            getCollaboratorsByCompany(checkinInfo.companyId),
+            getVehiclesByCompany(checkinInfo.companyId)
+        ]);
+        setSalesCollaborators(collaboratorsData);
+        setSalesAvailableVehicles(vehiclesData.filter(v => v.status === 'Disponível'));
+        if (collaboratorsData.length > 0) {
+            setSelectedSaleCollaboratorId(collaboratorsData[0].id);
+        }
+    } catch (error) {
+        console.error("Failed to load data for sales check-in", error);
+        setError("Falha ao carregar dados para check-in de vendas.");
+    } finally {
+        setSalesDataLoading(false);
+    }
   };
 
-  const handleSalesCountChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const count = parseInt(e.target.value, 10) || 0;
-    const positiveCount = Math.max(0, count);
-    setSalesCount(positiveCount);
-    setSoldModels(currentModels => {
-        const newModels = [...currentModels];
-        newModels.length = positiveCount;
-        return newModels.fill('', currentModels.length);
-    });
-  };
-
-  const handleSoldModelChange = (index: number, value: string) => {
-    setSoldModels(currentModels => {
-        const newModels = [...currentModels];
-        newModels[index] = value;
-        return newModels;
-    });
-  };
+  const filteredSalesVehicles = useMemo(() => {
+    if (!salesVehicleSearch) {
+        return salesAvailableVehicles;
+    }
+    return salesAvailableVehicles.filter(v => 
+        (v.placa && v.placa.toUpperCase().includes(salesVehicleSearch.toUpperCase())) ||
+        v.marca.toLowerCase().includes(salesVehicleSearch.toLowerCase()) ||
+        v.model.toLowerCase().includes(salesVehicleSearch.toLowerCase())
+    );
+  }, [salesAvailableVehicles, salesVehicleSearch]);
 
   const handleSubmitSalesCheckin = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!checkinInfo || !boothCode) return;
+    if (!checkinInfo || !boothCode || !selectedSaleCollaboratorId || !selectedSaleVehicleId) {
+        setSalesSubmitStatus('error');
+        return;
+    };
 
     setSalesSubmitting(true);
     setSalesSubmitStatus('idle');
 
-    const payload = {
-        boothCode: boothCode,
-        companyName: checkinInfo.companyName,
-        staffName: checkinInfo.staffName,
-        houveVendas: hadSales,
-        periodoVendas: hadSales === 'Sim' ? salesPeriod : null,
-        quantidadeVendas: hadSales === 'Sim' ? salesCount : 0,
-        modelosVendidos: hadSales === 'Sim' ? soldModels.filter(m => m && m.trim() !== '') : [],
-        timestamp: new Date().toISOString(),
-    };
+    const vehicleToSell = salesAvailableVehicles.find(v => v.id === selectedSaleVehicleId);
+    const collaborator = salesCollaborators.find(c => c.id === selectedSaleCollaboratorId);
+    const companyInfo = allEventCompanies.find(c => c.id === checkinInfo.companyId);
+
+    if (!vehicleToSell || !collaborator || !companyInfo) {
+        setSalesSubmitStatus('error');
+        setSalesSubmitting(false);
+        return;
+    }
 
     try {
-      await submitSalesCheckin(payload, checkinInfo.staffId, checkinInfo.eventId);
-      setSalesSubmitStatus('success');
-      setTimeout(() => setIsSalesModalOpen(false), 2000);
+        await updateVehicle({ 
+          ...vehicleToSell, 
+          status: 'Vendido',
+          soldByCollaboratorId: collaborator.id
+        });
+        
+        await sendTelaoNotification(
+            checkinInfo.eventId,
+            vehicleToSell,
+            collaborator,
+            companyInfo
+        );
+
+        const logDescription = `Registrou venda do veículo ${vehicleToSell.marca} ${vehicleToSell.model} (Placa: ${vehicleToSell.placa || 'N/D'}) pelo vendedor ${collaborator.name}.`;
+        await submitReport({
+            eventId: checkinInfo.eventId,
+            boothCode,
+            staffName: checkinInfo.staffName,
+            reportLabel: 'Check-in de Venda',
+            response: logDescription,
+        });
+
+        setSalesSubmitStatus('success');
+        setSalesAvailableVehicles(prev => prev.filter(v => v.id !== selectedSaleVehicleId));
+        setSelectedSaleVehicleId('');
+
+        setTimeout(() => {
+            setIsSalesModalOpen(false);
+        }, 2000);
+
     } catch (error) {
-      console.error(error);
-      setSalesSubmitStatus('error');
+        console.error("Failed to process sale check-in", error);
+        setSalesSubmitStatus('error');
     } finally {
-      setSalesSubmitting(false);
+        setSalesSubmitting(false);
     }
   };
+
 
   const handleSubmitReport = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -1352,74 +1399,68 @@ const InformesPage: React.FC = () => {
             </div>
         ) : (
             <form onSubmit={handleSubmitSalesCheckin} className="space-y-6">
-                <div>
-                    <p className="font-medium mb-2">Houve vendas?</p>
-                    <div className="flex gap-4">
-                        {['Sim', 'Não'].map(option => (
-                            <label key={option} className="flex-1 flex items-center justify-center gap-2 p-3 rounded-md border-2 border-border hover:bg-border cursor-pointer has-[:checked]:bg-primary has-[:checked]:text-black has-[:checked]:border-primary">
-                                <input type="radio" name="had-sales" value={option} checked={hadSales === option} onChange={(e) => setHadSales(e.target.value as 'Sim' | 'Não')} required className="sr-only" />
-                                <span className="font-semibold">{option}</span>
-                            </label>
-                        ))}
-                    </div>
-                </div>
-
-                {hadSales === 'Sim' && (
-                    <div className="space-y-6 border-t border-border pt-6 animate-fade-in">
+                {salesDataLoading ? <LoadingSpinner /> : salesCollaborators.length > 0 && salesAvailableVehicles.length > 0 ? (
+                    <>
                         <div>
-                            <p className="font-medium mb-2">Em qual período foram feitas essas vendas?</p>
-                            <div className="flex flex-col sm:flex-row gap-2">
-                                {['Manhã', 'Tarde', 'Noite'].map(option => (
-                                    <label key={option} className="flex-1 flex items-center justify-center gap-2 p-3 rounded-md border-2 border-border hover:bg-border cursor-pointer has-[:checked]:bg-primary has-[:checked]:text-black has-[:checked]:border-primary">
-                                        <input type="radio" name="sales-period" value={option} checked={salesPeriod === option} onChange={(e) => setSalesPeriod(e.target.value as 'Manhã'|'Tarde'|'Noite')} required className="sr-only" />
-                                        <span className="font-semibold">{option}</span>
+                            <label htmlFor="sale-collaborator" className="block text-sm font-medium mb-1 text-text">Colaborador que realizou a venda</label>
+                            <select
+                                id="sale-collaborator"
+                                value={selectedSaleCollaboratorId}
+                                onChange={(e) => setSelectedSaleCollaboratorId(e.target.value)}
+                                className="w-full px-3 py-2 border border-border rounded-md bg-background focus:outline-none focus:ring-2 focus:ring-primary"
+                                required
+                            >
+                                <option value="" disabled>Selecione um colaborador</option>
+                                {salesCollaborators.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
+                            </select>
+                        </div>
+
+                        <div>
+                            <label htmlFor="sale-vehicle-search" className="block text-sm font-medium mb-1 text-text">Veículo Vendido</label>
+                            <Input
+                                id="sale-vehicle-search"
+                                label=""
+                                placeholder="Buscar por placa, marca ou modelo..."
+                                value={salesVehicleSearch}
+                                onChange={(e) => setSalesVehicleSearch(e.target.value)}
+                                className="mb-2"
+                            />
+                            <div className="max-h-60 overflow-y-auto border border-border rounded-md p-2 space-y-2">
+                                {filteredSalesVehicles.length > 0 ? filteredSalesVehicles.map(vehicle => (
+                                    <label key={vehicle.id} className="flex items-center gap-3 p-2 rounded-md hover:bg-border cursor-pointer has-[:checked]:bg-primary/20">
+                                        <input
+                                            type="radio"
+                                            name="sale-vehicle"
+                                            value={vehicle.id}
+                                            checked={selectedSaleVehicleId === vehicle.id}
+                                            onChange={(e) => setSelectedSaleVehicleId(e.target.value)}
+                                            required
+                                            className="form-radio text-primary focus:ring-primary bg-background border-border"
+                                        />
+                                        <img src={vehicle.photoUrl} alt={vehicle.marca} className="w-12 h-12 object-cover rounded-md" />
+                                        <div>
+                                            <p className="font-semibold">{vehicle.marca} {vehicle.model}</p>
+                                            <p className="text-xs text-text-secondary">Placa: {vehicle.placa || 'N/D'}</p>
+                                        </div>
                                     </label>
-                                ))}
+                                )) : <p className="text-center text-sm text-text-secondary p-4">Nenhum veículo encontrado.</p>}
                             </div>
                         </div>
 
-                        <Input
-                            id="sales-count"
-                            label="Quantas vendas?"
-                            type="number"
-                            value={salesCount}
-                            onChange={handleSalesCountChange}
-                            min="0"
-                            required
-                        />
-
-                        {salesCount > 0 && (
-                            <div>
-                                <p className="font-medium mb-2">Por favor, digite aqui os modelos vendidos 👇👇</p>
-                                <div className="space-y-2 max-h-48 overflow-y-auto pr-2">
-                                    {Array.from({ length: salesCount }).map((_, index) => (
-                                        <Input
-                                            key={index}
-                                            id={`model-${index}`}
-                                            label={`Venda ${index + 1}`}
-                                            type="text"
-                                            value={soldModels[index] || ''}
-                                            onChange={(e) => handleSoldModelChange(index, e.target.value)}
-                                            placeholder="Modelo do produto"
-                                            className="mb-0"
-                                        />
-                                    ))}
-                                </div>
-                            </div>
+                        {salesSubmitStatus === 'error' && (
+                          <p className="text-red-500 text-sm text-center">Ocorreu um erro ao enviar. Verifique os dados e tente novamente.</p>
                         )}
-                    </div>
-                )}
 
-                {salesSubmitStatus === 'error' && (
-                  <p className="text-red-500 text-sm text-center">Ocorreu um erro ao enviar. Por favor, tente novamente.</p>
+                        <div className="flex justify-end gap-4 pt-4">
+                            <Button type="button" variant="secondary" onClick={() => setIsSalesModalOpen(false)}>Cancelar</Button>
+                            <Button type="submit" disabled={salesSubmitting || !selectedSaleCollaboratorId || !selectedSaleVehicleId}>
+                                {salesSubmitting ? <LoadingSpinner /> : 'Confirmar Venda'}
+                            </Button>
+                        </div>
+                    </>
+                ) : (
+                    <p className="text-center text-text-secondary py-8">Não há colaboradores ou veículos disponíveis para registrar uma venda.</p>
                 )}
-
-                <div className="flex justify-end gap-4 pt-4">
-                    <Button type="button" variant="secondary" onClick={() => setIsSalesModalOpen(false)}>Cancelar</Button>
-                    <Button type="submit" disabled={salesSubmitting}>
-                        {salesSubmitting ? <LoadingSpinner /> : 'Salvar'}
-                    </Button>
-                </div>
             </form>
         )}
       </Modal>
