@@ -19,7 +19,8 @@ import {
   CompanyCall,
   CallStatus,
   TelaoRequest,
-  TelaoRequestStatus
+  TelaoRequestStatus,
+  AlertLog
 } from '../types';
 
 // --- Supabase Client Initialization ---
@@ -1585,4 +1586,32 @@ export const resolveTelaoRequest = async (requestId: string, staffId: string, fe
     }
     
     return camelCaseKeys(data) as TelaoRequest;
+};
+
+// --- Alert Logs ---
+export const addAlertLog = async (logData: Omit<AlertLog, 'id' | 'createdAt'>): Promise<void> => {
+    const { error } = await supabase.from('alert_logs').insert(snakeCaseKeys(logData));
+    if (error) {
+        // This is not a critical failure, so we just log it. The main alert was sent.
+        console.error('Failed to log sent alert:', error);
+    }
+};
+
+export const getAlertLogsByEvent = async (eventId: string): Promise<AlertLog[]> => {
+    const { data, error } = await supabase
+        .from('alert_logs')
+        .select(`
+            *,
+            sender:users(name),
+            department:departments(name)
+        `)
+        .eq('event_id', eventId)
+        .order('created_at', { ascending: false });
+
+    if (error) {
+        console.error("Error fetching alert logs:", error);
+        throw new Error("Falha ao buscar os logs de alertas.");
+    }
+
+    return camelCaseKeys(data) as AlertLog[];
 };

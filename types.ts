@@ -230,3 +230,20 @@ export interface TelaoRequest {
   vehicle?: { marca: string; model: string };
   staff?: { name: string };
 }
+
+export interface AlertLog {
+  id: string;
+  createdAt: string;
+  eventId: string;
+  senderUserId: string;
+  departmentId?: string;
+  message: string;
+  recipients: {
+    staffId: string;
+    staffName: string;
+    staffPhone?: string;
+  }[];
+  // Joined data for display
+  sender?: { name: string };
+  department?: { name: string };
+}

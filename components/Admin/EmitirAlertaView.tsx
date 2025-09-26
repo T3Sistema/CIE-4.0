@@ -1,15 +1,18 @@
 import React, { useState, useEffect, useMemo, useCallback } from 'react';
-import { getDepartmentsByEvent, getStaffByEvent } from '../../services/api';
-import { Department, Staff } from '../../types';
+import { getDepartmentsByEvent, getStaffByEvent, addAlertLog, getAlertLogsByEvent } from '../../services/api';
+import { Department, Staff, AlertLog } from '../../types';
 import Button from '../Button';
 import LoadingSpinner from '../LoadingSpinner';
 import Modal from '../Modal';
+import { useAuth } from '../../context/AuthContext';
 
 interface Props {
   eventId: string;
 }
 
 const EmitirAlertaView: React.FC<Props> = ({ eventId }) => {
+  const { user } = useAuth();
+  
   // State for data
   const [departments, setDepartments] = useState<Department[]>([]);
   const [staffList, setStaffList] = useState<Staff[]>([]);
@@ -25,6 +28,11 @@ const EmitirAlertaView: React.FC<Props> = ({ eventId }) => {
   const [isConfirmModalOpen, setIsConfirmModalOpen] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [submitStatus, setSubmitStatus] = useState<'idle' | 'success' | 'error'>('idle');
+
+  // New state for logs view
+  const [view, setView] = useState<'form' | 'logs'>('form');
+  const [logs, setLogs] = useState<AlertLog[]>([]);
+  const [logsLoading, setLogsLoading] = useState(false);
 
   // Fetch initial data
   const fetchData = useCallback(async () => {
@@ -137,6 +145,21 @@ const EmitirAlertaView: React.FC<Props> = ({ eventId }) => {
       if (responses.some(res => !res.ok)) {
         throw new Error('Uma ou mais notificações falharam ao enviar.');
       }
+
+      if (user && selectedDepartment) {
+          await addAlertLog({
+              eventId: eventId,
+              senderUserId: user.id,
+              departmentId: selectedDepartment.id,
+              message: alertMessage,
+              recipients: targets.map(s => ({
+                  staffId: s.id,
+                  staffName: s.name,
+                  staffPhone: s.phone
+              }))
+          });
+      }
+
       setSubmitStatus('success');
       setTimeout(() => {
         resetForm();
@@ -147,6 +170,19 @@ const EmitirAlertaView: React.FC<Props> = ({ eventId }) => {
     } finally {
       setIsSubmitting(false);
     }
+  };
+
+  const handleViewLogs = async () => {
+      setView('logs');
+      setLogsLoading(true);
+      try {
+          const logsData = await getAlertLogsByEvent(eventId);
+          setLogs(logsData);
+      } catch (error) {
+          console.error("Failed to load alert logs", error);
+      } finally {
+          setLogsLoading(false);
+      }
   };
 
   // UI components for each step
@@ -225,14 +261,57 @@ const EmitirAlertaView: React.FC<Props> = ({ eventId }) => {
     </form>
   );
 
+  const renderLogsView = () => (
+    <div>
+        <div className="flex justify-between items-center mb-6">
+            <h2 className="text-3xl font-bold">Logs de Envios de Alertas</h2>
+            <Button variant="secondary" onClick={() => setView('form')}>Voltar para Envio</Button>
+        </div>
+        {logsLoading ? <LoadingSpinner /> : (
+            <div className="space-y-4 max-h-[60vh] overflow-y-auto pr-2">
+                {logs.length > 0 ? logs.map(log => (
+                    <div key={log.id} className="p-4 bg-secondary rounded-lg">
+                        <div className="flex justify-between items-start text-sm mb-2 border-b border-border pb-2">
+                            <div>
+                                <p><span className="font-semibold text-text-secondary">Enviado por:</span> {log.sender?.name || 'Usuário desconhecido'}</p>
+                                <p><span className="font-semibold text-text-secondary">Departamento:</span> {log.department?.name || 'N/A'}</p>
+                            </div>
+                            <p className="font-semibold text-text-secondary">{new Date(log.createdAt).toLocaleString('pt-BR')}</p>
+                        </div>
+                        <p className="font-semibold mb-1">Mensagem:</p>
+                        <p className="p-2 bg-background rounded-md text-sm whitespace-pre-wrap mb-3">{log.message}</p>
+                        <p className="font-semibold mb-1 text-sm">Destinatários ({log.recipients.length}):</p>
+                        <div className="text-xs text-text-secondary space-y-1">
+                            {log.recipients.map(r => <p key={r.staffId}>- {r.staffName}</p>)}
+                        </div>
+                    </div>
+                )) : (
+                    <p className="text-center text-text-secondary py-8">Nenhum alerta foi enviado para este evento ainda.</p>
+                )}
+            </div>
+        )}
+    </div>
+  );
+
   if (loading) return <LoadingSpinner />;
 
   return (
     <div className="bg-card p-6 rounded-lg shadow-md max-w-4xl mx-auto">
-        <h2 className="text-3xl font-bold mb-6 text-center">Emitir Alerta para a Equipe 🚨</h2>
-        {step === 1 && renderDepartmentStep()}
-        {step === 2 && renderStaffStep()}
-        {step === 3 && renderMessageStep()}
+        {view === 'form' ? (
+            <>
+                <div className="flex flex-col sm:flex-row justify-between items-center mb-6 gap-4">
+                    <h2 className="text-3xl font-bold text-center sm:text-left">Emitir Alerta para a Equipe 🚨</h2>
+                    <Button variant="secondary" onClick={handleViewLogs}>
+                        Logs de envios
+                    </Button>
+                </div>
+                {step === 1 && renderDepartmentStep()}
+                {step === 2 && renderStaffStep()}
+                {step === 3 && renderMessageStep()}
+            </>
+        ) : (
+            renderLogsView()
+        )}
         
         <Modal isOpen={isConfirmModalOpen} onClose={() => setIsConfirmModalOpen(false)} title="Confirmar Envio do Alerta">
             {submitStatus === 'success' ? (
