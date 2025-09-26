@@ -91,6 +91,9 @@ const AdminLayout: React.FC = () => {
       <NavLink to={`/admin/event/${eventId}/company-calls`} className={navLinkClasses} onClick={handleLinkClick}>
         Chamados (Empresas)
       </NavLink>
+      <NavLink to={`/admin/event/${eventId}/issue-alert`} className={navLinkClasses} onClick={handleLinkClick}>
+        Emitir Alerta 🚨
+      </NavLink>
       <NavLink to={`/admin/event/${eventId}/stock-control`} className={navLinkClasses} onClick={handleLinkClick}>
         Log de controle de estoque
       </NavLink>

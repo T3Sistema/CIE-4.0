@@ -18,6 +18,7 @@ import NotificationsManager from '../../components/Admin/NotificationsManager';
 import CompanyCallManager from '../../components/Admin/CompanyCallManager';
 import CompanyCallsDashboard from '../../components/Admin/CompanyCallsDashboard';
 import TelaoRequestsDashboard from '../../components/Admin/TelaoRequestsDashboard';
+import EmitirAlertaView from '../../components/Admin/EmitirAlertaView';
 
 const EventDashboardPage: React.FC = () => {
   const { eventId } = useParams<{ eventId: string }>();
@@ -50,6 +51,7 @@ const EventDashboardPage: React.FC = () => {
         <Route path="company-calls" element={<CompanyCallManager eventId={eventId} />} />
         <Route path="company-calls-dashboard" element={<CompanyCallsDashboard />} />
         <Route path="telao-requests" element={<TelaoRequestsDashboard />} />
+        <Route path="issue-alert" element={<EmitirAlertaView eventId={eventId} />} />
         <Route path="stock-control" element={<StockControlManager eventId={eventId} />} />
         <Route path="stock-report" element={<StockReportView eventId={eventId} />} />
         <Route path="notifications" element={<NotificationsManager eventId={eventId} />} />
