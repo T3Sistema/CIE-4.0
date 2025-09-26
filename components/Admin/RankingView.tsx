@@ -123,9 +123,24 @@ const RankingView: React.FC<Props> = ({ eventId }) => {
     fetchData();
   }, [fetchData]);
 
-  const isSameDay = (dateString: string, filterDate: string) => {
-    if (!dateString || !filterDate) return false;
-    return dateString.startsWith(filterDate);
+  const isSameDay = (utcDateString: string, filterDate: string) => {
+    if (!utcDateString || !filterDate) return false;
+    
+    // Create a Date object from the UTC timestamp.
+    // The browser automatically converts it to the user's local timezone.
+    const localDate = new Date(utcDateString);
+
+    // Get the year, month, and day from the localDate object.
+    // Note: getMonth() is 0-indexed, so we add 1.
+    const year = localDate.getFullYear();
+    const month = (localDate.getMonth() + 1).toString().padStart(2, '0');
+    const day = localDate.getDate().toString().padStart(2, '0');
+
+    // Construct the YYYY-MM-DD string for the local date.
+    const localDateString = `${year}-${month}-${day}`;
+    
+    // Compare it with the filter date from the date picker.
+    return localDateString === filterDate;
   };
 
   const filteredReports = useMemo(() => {
@@ -205,6 +220,9 @@ const RankingView: React.FC<Props> = ({ eventId }) => {
   }, [staffList, filteredActivities]);
 
     const totalSalesCount = useMemo(() => filteredDetailedSales.length, [filteredDetailedSales]);
+    const totalVisitsCount = useMemo(() => visitsData.reduce((sum, item) => sum + item.value, 0), [visitsData]);
+    const totalOccurrencesCount = useMemo(() => occurrencesData.reduce((sum, item) => sum + item.value, 0), [occurrencesData]);
+    const totalActivitiesCount = useMemo(() => staffData.reduce((sum, item) => sum + item.value, 0), [staffData]);
 
     const rankedCompaniesBySales = useMemo(() => {
         const salesByCompany = filteredDetailedSales.reduce((acc, sale) => {
@@ -410,6 +428,71 @@ const RankingView: React.FC<Props> = ({ eventId }) => {
 
     doc.save('relatorio_vendas_modelo.pdf');
   };
+    
+    const handleDownloadSalesByCompanyPdf = () => {
+    const doc = new jspdf.jsPDF();
+    const dateText = dateFilter ? ` em ${new Date(dateFilter + 'T00:00:00').toLocaleDateString('pt-BR')}` : '';
+    doc.setFontSize(18);
+    doc.text(`Ranking de Vendas por Empresa${dateText}`, 14, 22);
+    doc.setFontSize(11);
+    doc.setTextColor(100);
+    doc.text(`Gerado em: ${new Date().toLocaleString('pt-BR')}`, 14, 30);
+
+    const tableColumn = ["Posição", "Empresa", "Nº de Vendas"];
+    const tableRows: (string | number)[][] = [];
+
+    rankedCompaniesBySales.forEach((item, index) => {
+        tableRows.push([index + 1, item.name, item.salesCount]);
+    });
+
+    doc.autoTable({
+        head: [tableColumn],
+        body: tableRows,
+        startY: 35,
+        theme: 'grid',
+        headStyles: { fillColor: [18, 181, 229] },
+    });
+
+    doc.save('ranking_vendas_empresa.pdf');
+  };
+
+  const handleDownloadSalesBySellerPdf = () => {
+    const doc = new jspdf.jsPDF();
+    const companyFilterText = sellerCompanyFilter !== 'all' 
+        ? companies.find(c => c.id === sellerCompanyFilter)?.name || 'N/A'
+        : 'Todas as Empresas';
+    const dateText = dateFilter ? ` em ${new Date(dateFilter + 'T00:00:00').toLocaleDateString('pt-BR')}` : '';
+    
+    doc.setFontSize(18);
+    doc.text(`Ranking de Vendas por Vendedor${dateText}`, 14, 22);
+    doc.setFontSize(11);
+    doc.setTextColor(100);
+    doc.text(`Filtro de Empresa: ${companyFilterText}`, 14, 30);
+    doc.text(`Gerado em: ${new Date().toLocaleString('pt-BR')}`, 14, 38);
+
+    const tableColumn = ["Posição", "Vendedor", "Empresa", "Código", "Nº de Vendas"];
+    const tableRows: (string | number)[][] = [];
+
+    rankedSellers.forEach((seller, index) => {
+        tableRows.push([
+            index + 1, 
+            seller.name, 
+            seller.companyName, 
+            seller.collaboratorCode, 
+            seller.salesCount
+        ]);
+    });
+
+    doc.autoTable({
+        head: [tableColumn],
+        body: tableRows,
+        startY: 42,
+        theme: 'grid',
+        headStyles: { fillColor: [18, 181, 229] },
+    });
+
+    doc.save('ranking_vendas_vendedor.pdf');
+  };
 
     const handleDownloadSalesCsv = () => {
         setCsvLoading(true);
@@ -458,6 +541,45 @@ const RankingView: React.FC<Props> = ({ eventId }) => {
         }
     };
 
+  const handleDownloadPdf = () => {
+    switch (view) {
+      case 'visits':
+        handleDownloadVisitsPdf();
+        break;
+      case 'occurrences':
+        handleDownloadOccurrencesPdf(occurrencesData.map(o => o.label));
+        break;
+      case 'staff':
+        handleDownloadStaffPdf();
+        break;
+      case 'salesByCompany':
+        handleDownloadSalesByCompanyPdf();
+        break;
+      case 'salesBySeller':
+        handleDownloadSalesBySellerPdf();
+        break;
+      case 'salesMap':
+        handleDownloadSalesMapPdf();
+        break;
+    }
+  };
+
+  const hasDataForCurrentView = useMemo(() => {
+    switch (view) {
+        case 'visits': return visitsData.length > 0;
+        case 'occurrences': return occurrencesData.length > 0;
+        case 'staff': return staffData.length > 0;
+        case 'salesByCompany': return rankedCompaniesBySales.length > 0;
+        case 'salesBySeller': return rankedSellers.length > 0;
+        case 'salesMap': return salesMapData.length > 0;
+        default: return false;
+    }
+  }, [view, visitsData, occurrencesData, staffData, rankedCompaniesBySales, rankedSellers, salesMapData]);
+
+  const isSalesView = useMemo(() => {
+    return ['salesByCompany', 'salesBySeller', 'salesMap'].includes(view);
+  }, [view]);
+
   const chartData = useMemo(() => {
     switch (view) {
       case 'visits':
@@ -487,9 +609,28 @@ const RankingView: React.FC<Props> = ({ eventId }) => {
         return 'Ranking de Principais Ocorrências';
     }
   }, [view]);
+  
+  const displayData = useMemo(() => {
+      const filterText = dateFilter ? ` em ${new Date(dateFilter + 'T12:00:00').toLocaleDateString('pt-BR')}` : '';
+      switch (view) {
+          case 'visits':
+              return { title: `Total de Visitas ${filterText}`, count: totalVisitsCount };
+          case 'occurrences':
+              return { title: `Total de Ocorrências ${filterText}`, count: totalOccurrencesCount };
+          case 'staff':
+              return { title: `Total de Atividades ${filterText}`, count: totalActivitiesCount };
+          case 'salesByCompany':
+          case 'salesBySeller':
+          case 'salesMap':
+          default:
+              return { title: `Total de Vendas ${filterText}`, count: totalSalesCount };
+      }
+  }, [view, dateFilter, totalSalesCount, totalVisitsCount, totalOccurrencesCount, totalActivitiesCount]);
 
   const maxValue = Math.max(...chartData.map(d => d.value), 0);
   const maxSalesCompanyValue = Math.max(...rankedCompaniesBySales.map(c => c.salesCount), 0);
+  const pdfButtonText = view === 'occurrences' ? 'Download Detalhado' : 'Download PDF';
+
 
   if (loading) return <LoadingSpinner />;
   
@@ -523,88 +664,60 @@ const RankingView: React.FC<Props> = ({ eventId }) => {
           Vendas por Modelo
         </Button>
       </div>
-      
-      <div className="mb-6 bg-secondary p-4 rounded-lg text-center">
-          <h4 className="text-lg font-semibold text-text-secondary">Total de Vendas {dateFilter ? `em ${new Date(dateFilter + 'T12:00:00').toLocaleDateString('pt-BR')}` : ''}</h4>
-          <p className="text-4xl font-bold text-primary">{totalSalesCount}</p>
-      </div>
 
       <div>
         <div className="flex flex-col md:flex-row justify-between items-start md:items-center mb-4 gap-4">
-          <h3 className="text-xl font-semibold text-primary">{chartTitle}</h3>
-          <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-4 w-full md:w-auto">
-            <div className="flex items-center gap-2">
-                <Input
-                    id="date-filter"
-                    type="date"
-                    label=""
-                    value={dateFilter}
-                    onChange={(e) => setDateFilter(e.target.value)}
-                    className="px-3 py-1.5 border border-border rounded-md bg-background text-text-secondary focus:outline-none focus:ring-2 focus:ring-primary h-10 mb-0"
-                />
-                <Button variant="secondary" onClick={() => setDateFilter('')} className="text-sm py-2 px-3">Limpar</Button>
-            </div>
-            {view === 'occurrences' && chartData.length > 0 && (
-              <Button
-                variant="secondary"
-                onClick={() => handleDownloadOccurrencesPdf(occurrencesData.map(o => o.label))}
-                className="text-sm py-2 px-3 flex items-center justify-center"
-              >
-                <DownloadIcon />
-                Download Todas
-              </Button>
-            )}
-            {view === 'visits' && chartData.length > 0 && (
-              <Button
-                variant="secondary"
-                onClick={handleDownloadVisitsPdf}
-                className="text-sm py-2 px-3 flex items-center justify-center"
-              >
-                <DownloadIcon />
-                Download PDF
-              </Button>
-            )}
-            {view === 'staff' && chartData.length > 0 && (
-              <Button
-                variant="secondary"
-                onClick={handleDownloadStaffPdf}
-                className="text-sm py-2 px-3 flex items-center justify-center"
-              >
-                <DownloadIcon />
-                Download PDF
-              </Button>
-            )}
-            {view === 'salesMap' && salesMapData.length > 0 && (
-              <Button
-                variant="secondary"
-                onClick={handleDownloadSalesMapPdf}
-                className="text-sm py-2 px-3 flex items-center justify-center"
-              >
-                <DownloadIcon />
-                Download PDF
-              </Button>
-            )}
-            {(view === 'salesByCompany' || view === 'salesBySeller' || view === 'salesMap') && (
-                <Button
-                    variant="secondary"
-                    onClick={handleDownloadSalesCsv}
-                    disabled={csvLoading}
-                    className="text-sm py-2 px-3 flex items-center min-w-[150px] justify-center"
-                >
-                    {csvLoading ? (
-                        <div className="flex justify-center items-center h-5">
-                            <div className="animate-spin rounded-full h-5 w-5 border-b-2 border-text"></div>
-                        </div>
-                    ) : (
-                        <>
+            <h3 className="text-xl font-semibold text-primary">{chartTitle}</h3>
+            <div className="flex flex-col sm:flex-row items-stretch sm:items-end gap-4 w-full md:w-auto">
+                <div className="text-right">
+                    <h4 className="text-sm font-semibold text-text-secondary">{displayData.title}</h4>
+                    <p className="text-2xl font-bold text-primary">{displayData.count}</p>
+                </div>
+                <div className="flex items-center gap-2">
+                    <Input
+                        id="date-filter"
+                        type="date"
+                        label=""
+                        value={dateFilter}
+                        onChange={(e) => setDateFilter(e.target.value)}
+                        className="px-3 py-1.5 border border-border rounded-md bg-background text-text-secondary focus:outline-none focus:ring-2 focus:ring-primary h-10 mb-0"
+                    />
+                    <Button variant="secondary" onClick={() => setDateFilter('')} className="text-sm py-2 px-3">Limpar</Button>
+                </div>
+                <div className="flex items-center gap-2">
+                    {hasDataForCurrentView && (
+                        <Button
+                            variant="secondary"
+                            onClick={handleDownloadPdf}
+                            className="text-sm py-2 px-3 flex items-center justify-center"
+                        >
                             <DownloadIcon />
-                            Download CSV
-                        </>
+                            {pdfButtonText}
+                        </Button>
                     )}
-                </Button>
-            )}
-          </div>
+                    {isSalesView && filteredDetailedSales.length > 0 && (
+                        <Button
+                            variant="secondary"
+                            onClick={handleDownloadSalesCsv}
+                            disabled={csvLoading}
+                            className="text-sm py-2 px-3 flex items-center min-w-[150px] justify-center"
+                        >
+                            {csvLoading ? (
+                                <div className="flex justify-center items-center h-5">
+                                    <div className="animate-spin rounded-full h-5 w-5 border-b-2 border-text"></div>
+                                </div>
+                            ) : (
+                                <>
+                                    <DownloadIcon />
+                                    Download CSV
+                                </>
+                            )}
+                        </Button>
+                    )}
+                </div>
+            </div>
         </div>
+
 
         {(view === 'visits' || view === 'occurrences' || view === 'staff') && (
             chartData.length > 0 ? (

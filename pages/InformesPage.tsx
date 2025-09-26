@@ -1,6 +1,7 @@
 
 
 
+
 import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { 
@@ -488,12 +489,35 @@ const InformesPage: React.FC = () => {
     }
 
     try {
-        await updateVehicle({ 
+        const updatedVehicle = await updateVehicle({ 
           ...vehicleToSell, 
           status: 'Vendido',
           soldByCollaboratorId: collaborator.id
         });
         
+        // Fire and forget webhook for bd-sheet
+        try {
+            const webhookPayload = {
+                'Veículo (Marca)': updatedVehicle.marca,
+                'Veículo (Modelo)': updatedVehicle.model,
+                'Placa': updatedVehicle.placa || 'N/D',
+                'Loja': companyInfo.name,
+                'Vendedor': collaborator.name,
+                'Data da Venda': updatedVehicle.updatedAt 
+                    ? new Date(updatedVehicle.updatedAt).toLocaleString('pt-BR') 
+                    : new Date().toLocaleString('pt-BR'),
+            };
+            fetch('https://webhook.triad3.io/webhook/bd-sheet', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(webhookPayload)
+            }).catch(webhookError => {
+                console.error("Failed to send bd-sheet webhook (non-critical):", webhookError);
+            });
+        } catch (e) {
+             console.error("Error preparing bd-sheet webhook:", e);
+        }
+
         await sendTelaoNotification(
             checkinInfo.eventId,
             vehicleToSell,
