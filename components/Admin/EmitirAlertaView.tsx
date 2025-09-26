@@ -6,9 +6,17 @@ import LoadingSpinner from '../LoadingSpinner';
 import Modal from '../Modal';
 import { useAuth } from '../../context/AuthContext';
 
+declare const jspdf: any;
+
 interface Props {
   eventId: string;
 }
+
+const DownloadIcon = () => (
+    <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4 mr-2" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+      <path strokeLinecap="round" strokeLinejoin="round" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
+    </svg>
+);
 
 const EmitirAlertaView: React.FC<Props> = ({ eventId }) => {
   const { user } = useAuth();
@@ -185,6 +193,65 @@ const EmitirAlertaView: React.FC<Props> = ({ eventId }) => {
       }
   };
 
+  const handleDownloadPdf = () => {
+    const doc = new jspdf.jsPDF();
+    doc.setFontSize(18);
+    doc.text("Relatório de Alertas Enviados", 14, 22);
+    doc.setFontSize(11);
+    doc.setTextColor(100);
+    doc.text(`Gerado em: ${new Date().toLocaleString('pt-BR')}`, 14, 30);
+
+    // Main table for all logs
+    const tableColumn = ["Data/Hora", "Enviado por", "Departamento", "Mensagem", "Destinatários"];
+    const tableRows: string[][] = [];
+
+    logs.forEach(log => {
+      const rowData = [
+        new Date(log.createdAt).toLocaleString('pt-BR'),
+        log.sender?.name || 'N/A',
+        log.department?.name || 'N/A',
+        log.message,
+        log.recipients.map(r => r.staffName).join(',\n')
+      ];
+      tableRows.push(rowData);
+    });
+
+    doc.autoTable({
+      head: [tableColumn],
+      body: tableRows,
+      startY: 35,
+      theme: 'grid',
+      headStyles: { fillColor: [18, 181, 229] },
+    });
+    
+    // Summary table for counts per staff
+    const staffAlertCounts: { [key: string]: number } = {};
+    logs.forEach(log => {
+        log.recipients.forEach(recipient => {
+            staffAlertCounts[recipient.staffName] = (staffAlertCounts[recipient.staffName] || 0) + 1;
+        });
+    });
+
+    const summaryRows = Object.entries(staffAlertCounts)
+        .sort(([, countA], [, countB]) => countB - countA)
+        .map(([name, count]) => [name, count]);
+
+    if (summaryRows.length > 0) {
+        doc.setFontSize(14);
+        doc.text("Total de Alertas Recebidos por Membro", 14, doc.autoTable.previous.finalY + 15);
+        
+        doc.autoTable({
+            head: [["Membro da Equipe", "Total de Alertas"]],
+            body: summaryRows,
+            startY: doc.autoTable.previous.finalY + 22,
+            theme: 'striped',
+            headStyles: { fillColor: [44, 53, 71] }, // secondary color
+        });
+    }
+
+    doc.save("relatorio_alertas_enviados.pdf");
+  };
+
   // UI components for each step
   const renderDepartmentStep = () => (
     <div>
@@ -263,9 +330,20 @@ const EmitirAlertaView: React.FC<Props> = ({ eventId }) => {
 
   const renderLogsView = () => (
     <div>
-        <div className="flex justify-between items-center mb-6">
+        <div className="flex flex-col sm:flex-row justify-between items-center mb-6 gap-4">
             <h2 className="text-3xl font-bold">Logs de Envios de Alertas</h2>
-            <Button variant="secondary" onClick={() => setView('form')}>Voltar para Envio</Button>
+            <div className="flex items-center gap-4">
+                <Button 
+                    variant="secondary" 
+                    onClick={handleDownloadPdf} 
+                    disabled={logs.length === 0}
+                    className="text-sm py-2 px-3 flex items-center"
+                >
+                    <DownloadIcon />
+                    Download PDF
+                </Button>
+                <Button variant="secondary" onClick={() => setView('form')}>Voltar para Envio</Button>
+            </div>
         </div>
         {logsLoading ? <LoadingSpinner /> : (
             <div className="space-y-4 max-h-[60vh] overflow-y-auto pr-2">
