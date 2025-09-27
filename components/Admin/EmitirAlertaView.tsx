@@ -26,18 +26,27 @@ const EmitirAlertaView: React.FC<Props> = ({ eventId }) => {
   const [staffList, setStaffList] = useState<Staff[]>([]);
   const [loading, setLoading] = useState(true);
 
-  // State for form flow
-  const [step, setStep] = useState(1); // 1: Dept, 2: Staff, 3: Message
+  // State for choosing alert type
+  const [alertType, setAlertType] = useState<'staff' | 'group' | null>(null);
+
+  // State for STAFF form flow
+  const [step, setStep] = useState(1);
   const [selectedDepartment, setSelectedDepartment] = useState<Department | null>(null);
   const [selectedStaffIds, setSelectedStaffIds] = useState<Set<string>>(new Set());
   const [alertMessage, setAlertMessage] = useState('');
   
-  // State for confirmation and submission
+  // State for STAFF confirmation and submission
   const [isConfirmModalOpen, setIsConfirmModalOpen] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [submitStatus, setSubmitStatus] = useState<'idle' | 'success' | 'error'>('idle');
 
-  // New state for logs view
+  // State for GROUP form flow
+  const [groupAlertMessage, setGroupAlertMessage] = useState('');
+  const [isGroupConfirmModalOpen, setIsGroupConfirmModalOpen] = useState(false);
+  const [isSubmittingGroup, setIsSubmittingGroup] = useState(false);
+  const [groupSubmitStatus, setGroupSubmitStatus] = useState<'idle' | 'success' | 'error'>('idle');
+
+  // State for logs view
   const [view, setView] = useState<'form' | 'logs'>('form');
   const [logs, setLogs] = useState<AlertLog[]>([]);
   const [logsLoading, setLogsLoading] = useState(false);
@@ -97,6 +106,12 @@ const EmitirAlertaView: React.FC<Props> = ({ eventId }) => {
       setStep(prev => prev - 1);
     }
   };
+  
+  const handleBackToChoice = () => {
+      resetStaffForm();
+      resetGroupForm();
+      setAlertType(null);
+  };
 
   const handleProceedToMessage = () => {
     if (selectedStaffIds.size > 0) {
@@ -110,8 +125,15 @@ const EmitirAlertaView: React.FC<Props> = ({ eventId }) => {
       setIsConfirmModalOpen(true);
     }
   };
+
+  const handleOpenGroupConfirmModal = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (groupAlertMessage.trim()) {
+      setIsGroupConfirmModalOpen(true);
+    }
+  };
   
-  const resetForm = () => {
+  const resetStaffForm = () => {
       setStep(1);
       setSelectedDepartment(null);
       setSelectedStaffIds(new Set());
@@ -120,7 +142,14 @@ const EmitirAlertaView: React.FC<Props> = ({ eventId }) => {
       setSubmitStatus('idle');
   };
 
-  // Handler for final submission
+  const resetGroupForm = () => {
+    setGroupAlertMessage('');
+    setIsGroupConfirmModalOpen(false);
+    setGroupSubmitStatus('idle');
+    setIsSubmittingGroup(false);
+  };
+
+  // Handler for STAFF final submission
   const handleConfirmAndSend = async () => {
     setIsSubmitting(true);
     setSubmitStatus('idle');
@@ -170,13 +199,55 @@ const EmitirAlertaView: React.FC<Props> = ({ eventId }) => {
 
       setSubmitStatus('success');
       setTimeout(() => {
-        resetForm();
+        resetStaffForm();
+        handleBackToChoice();
       }, 3000);
     } catch (error) {
       console.error("Failed to send alerts:", error);
       setSubmitStatus('error');
     } finally {
       setIsSubmitting(false);
+    }
+  };
+
+  // Handler for GROUP final submission
+  const handleGroupAlertSend = async () => {
+    setIsSubmittingGroup(true);
+    setGroupSubmitStatus('idle');
+
+    const webhookUrl = 'https://webhook.triad3.io/webhook/aca7d18d-8c37-49ae-92a4-03285bc6729a';
+    
+    try {
+      const response = await fetch(webhookUrl, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ message: groupAlertMessage }),
+      });
+
+      if (!response.ok) {
+        throw new Error('Webhook para grupo falhou.');
+      }
+
+      if (user) {
+        await addAlertLog({
+          eventId: eventId,
+          senderUserId: user.id,
+          message: groupAlertMessage,
+          recipients: [{ staffId: 'GROUP', staffName: 'Alerta para Grupo', staffPhone: '' }],
+        });
+      }
+
+      setGroupSubmitStatus('success');
+      setTimeout(() => {
+        resetGroupForm();
+        handleBackToChoice();
+      }, 3000);
+
+    } catch (error) {
+      console.error("Failed to send group alert:", error);
+      setGroupSubmitStatus('error');
+    } finally {
+      setIsSubmittingGroup(false);
     }
   };
 
@@ -201,7 +272,6 @@ const EmitirAlertaView: React.FC<Props> = ({ eventId }) => {
     doc.setTextColor(100);
     doc.text(`Gerado em: ${new Date().toLocaleString('pt-BR')}`, 14, 30);
 
-    // Main table for all logs
     const tableColumn = ["Data/Hora", "Enviado por", "Departamento", "Mensagem", "Destinatários"];
     const tableRows: string[][] = [];
 
@@ -209,7 +279,7 @@ const EmitirAlertaView: React.FC<Props> = ({ eventId }) => {
       const rowData = [
         new Date(log.createdAt).toLocaleString('pt-BR'),
         log.sender?.name || 'N/A',
-        log.department?.name || 'N/A',
+        log.department?.name || 'Grupo',
         log.message,
         log.recipients.map(r => r.staffName).join(',\n')
       ];
@@ -224,7 +294,6 @@ const EmitirAlertaView: React.FC<Props> = ({ eventId }) => {
       headStyles: { fillColor: [18, 181, 229] },
     });
     
-    // Summary table for counts per staff
     const staffAlertCounts: { [key: string]: number } = {};
     logs.forEach(log => {
         log.recipients.forEach(recipient => {
@@ -245,14 +314,14 @@ const EmitirAlertaView: React.FC<Props> = ({ eventId }) => {
             body: summaryRows,
             startY: doc.autoTable.previous.finalY + 22,
             theme: 'striped',
-            headStyles: { fillColor: [44, 53, 71] }, // secondary color
+            headStyles: { fillColor: [44, 53, 71] },
         });
     }
 
     doc.save("relatorio_alertas_enviados.pdf");
   };
 
-  // UI components for each step
+  // UI components
   const renderDepartmentStep = () => (
     <div>
       <h3 className="text-xl font-semibold mb-4 text-center">Passo 1: Selecione um Departamento</h3>
@@ -328,6 +397,27 @@ const EmitirAlertaView: React.FC<Props> = ({ eventId }) => {
     </form>
   );
 
+  const renderGroupAlertForm = () => (
+    <form onSubmit={handleOpenGroupConfirmModal}>
+      <div className="flex justify-between items-center mb-4">
+        <h3 className="text-xl font-semibold text-center">Mensagem para o Grupo</h3>
+      </div>
+      <textarea
+        value={groupAlertMessage}
+        onChange={(e) => setGroupAlertMessage(e.target.value)}
+        rows={5}
+        className="w-full p-3 border border-border rounded-md bg-background focus:outline-none focus:ring-2 focus:ring-primary"
+        placeholder="Digite a mensagem de alerta para todo o grupo aqui..."
+        required
+      />
+      <div className="mt-6 flex justify-end">
+        <Button type="submit" disabled={!groupAlertMessage.trim()}>
+          Enviar para o Grupo
+        </Button>
+      </div>
+    </form>
+  );
+
   const renderLogsView = () => (
     <div>
         <div className="flex flex-col sm:flex-row justify-between items-center mb-6 gap-4">
@@ -342,7 +432,7 @@ const EmitirAlertaView: React.FC<Props> = ({ eventId }) => {
                     <DownloadIcon />
                     Download PDF
                 </Button>
-                <Button variant="secondary" onClick={() => setView('form')}>Voltar para Envio</Button>
+                <Button variant="secondary" onClick={() => { setView('form'); handleBackToChoice(); }}>Voltar para Envio</Button>
             </div>
         </div>
         {logsLoading ? <LoadingSpinner /> : (
@@ -352,7 +442,7 @@ const EmitirAlertaView: React.FC<Props> = ({ eventId }) => {
                         <div className="flex justify-between items-start text-sm mb-2 border-b border-border pb-2">
                             <div>
                                 <p><span className="font-semibold text-text-secondary">Enviado por:</span> {log.sender?.name || 'Usuário desconhecido'}</p>
-                                <p><span className="font-semibold text-text-secondary">Departamento:</span> {log.department?.name || 'N/A'}</p>
+                                <p><span className="font-semibold text-text-secondary">Departamento:</span> {log.department?.name || 'Grupo'}</p>
                             </div>
                             <p className="font-semibold text-text-secondary">{new Date(log.createdAt).toLocaleString('pt-BR')}</p>
                         </div>
@@ -377,20 +467,55 @@ const EmitirAlertaView: React.FC<Props> = ({ eventId }) => {
     <div className="bg-card p-6 rounded-lg shadow-md max-w-4xl mx-auto">
         {view === 'form' ? (
             <>
-                <div className="flex flex-col sm:flex-row justify-between items-center mb-6 gap-4">
-                    <h2 className="text-3xl font-bold text-center sm:text-left">Emitir Alerta para a Equipe 🚨</h2>
-                    <Button variant="secondary" onClick={handleViewLogs}>
-                        Logs de envios
-                    </Button>
-                </div>
-                {step === 1 && renderDepartmentStep()}
-                {step === 2 && renderStaffStep()}
-                {step === 3 && renderMessageStep()}
+                {alertType === null ? (
+                    <>
+                        <div className="flex flex-col sm:flex-row justify-between items-center mb-6 gap-4">
+                             <h2 className="text-3xl font-bold text-center sm:text-left">Emitir Alerta 🚨</h2>
+                             <Button variant="secondary" onClick={handleViewLogs}>
+                                Logs de envios
+                            </Button>
+                        </div>
+                        <div>
+                             <h3 className="text-xl font-semibold mb-4 text-center">Para quem você deseja enviar o alerta?</h3>
+                             <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                                <button
+                                    onClick={() => setAlertType('staff')}
+                                    className="p-8 bg-secondary rounded-lg text-center font-semibold text-lg transition-transform transform hover:scale-105 hover:bg-secondary-hover"
+                                >
+                                    Para um STAFF
+                                </button>
+                                <button
+                                    onClick={() => setAlertType('group')}
+                                    className="p-8 bg-secondary rounded-lg text-center font-semibold text-lg transition-transform transform hover:scale-105 hover:bg-secondary-hover"
+                                >
+                                    Para um GRUPO
+                                </button>
+                             </div>
+                        </div>
+                    </>
+                ) : alertType === 'staff' ? (
+                    <>
+                        <div className="mb-4">
+                            <Button variant="secondary" onClick={handleBackToChoice}>&larr; Voltar para seleção</Button>
+                        </div>
+                        {step === 1 && renderDepartmentStep()}
+                        {step === 2 && renderStaffStep()}
+                        {step === 3 && renderMessageStep()}
+                    </>
+                ) : ( // alertType === 'group'
+                    <>
+                        <div className="mb-4">
+                           <Button variant="secondary" onClick={handleBackToChoice}>&larr; Voltar para seleção</Button>
+                        </div>
+                        {renderGroupAlertForm()}
+                    </>
+                )}
             </>
         ) : (
             renderLogsView()
         )}
         
+        {/* Staff Alert Modal */}
         <Modal isOpen={isConfirmModalOpen} onClose={() => setIsConfirmModalOpen(false)} title="Confirmar Envio do Alerta">
             {submitStatus === 'success' ? (
                  <div className="text-center p-4">
@@ -422,6 +547,38 @@ const EmitirAlertaView: React.FC<Props> = ({ eventId }) => {
                         </Button>
                         <Button onClick={handleConfirmAndSend} disabled={isSubmitting}>
                             {isSubmitting ? <LoadingSpinner /> : 'Confirmar e Enviar'}
+                        </Button>
+                    </div>
+                </div>
+            )}
+        </Modal>
+
+        {/* Group Alert Modal */}
+        <Modal isOpen={isGroupConfirmModalOpen} onClose={() => setIsGroupConfirmModalOpen(false)} title="Confirmar Envio para Grupo">
+            {groupSubmitStatus === 'success' ? (
+                 <div className="text-center p-4">
+                    <svg xmlns="http://www.w3.org/2000/svg" className="h-16 w-16 mx-auto text-green-500" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
+                    </svg>
+                    <p className="mt-4 text-lg font-semibold">Alerta para o grupo enviado com sucesso!</p>
+                </div>
+            ) : (
+                <div className="space-y-4">
+                    <div>
+                        <h4 className="font-semibold text-primary">Destinatário</h4>
+                        <p>Todo o Grupo</p>
+                    </div>
+                    <div>
+                        <h4 className="font-semibold text-primary">Mensagem</h4>
+                        <p className="p-2 bg-secondary rounded-md whitespace-pre-wrap">{groupAlertMessage}</p>
+                    </div>
+                    {groupSubmitStatus === 'error' && <p className="text-red-500 text-center">Falha ao enviar o alerta para o grupo.</p>}
+                    <div className="flex justify-end gap-4 pt-4">
+                        <Button variant="secondary" onClick={() => setIsGroupConfirmModalOpen(false)} disabled={isSubmittingGroup}>
+                            Editar
+                        </Button>
+                        <Button onClick={handleGroupAlertSend} disabled={isSubmittingGroup}>
+                            {isSubmittingGroup ? <LoadingSpinner /> : 'Confirmar e Enviar'}
                         </Button>
                     </div>
                 </div>
