@@ -1,4 +1,5 @@
 
+
 import React, { useState, useEffect, useMemo, useCallback, useRef } from 'react';
 import { 
     getParticipantCompaniesByEvent, 
@@ -23,6 +24,8 @@ import Input from '../Input';
 import Button from '../Button';
 import LoadingSpinner from '../LoadingSpinner';
 import ConfirmationModal from '../ConfirmationModal';
+
+declare const jspdf: any;
 
 interface Props {
   eventId: string;
@@ -53,6 +56,12 @@ const emptyVehicle: Omit<Vehicle, 'id' | 'createdAt'> = {
   status: 'Disponível'
 };
 
+const DownloadIcon = () => (
+    <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4 mr-2" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+      <path strokeLinecap="round" strokeLinejoin="round" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
+    </svg>
+);
+
 const ParticipantCompaniesManager: React.FC<Props> = ({ eventId }) => {
   const [companies, setCompanies] = useState<ParticipantCompany[]>([]);
   const [allButtons, setAllButtons] = useState<ReportButtonConfig[]>([]);
@@ -67,6 +76,7 @@ const ParticipantCompaniesManager: React.FC<Props> = ({ eventId }) => {
   const [logoFileName, setLogoFileName] = useState('');
   
   const [companyStats, setCompanyStats] = useState<Record<string, { collaborators: number; stock: number }>>({});
+  const [isDownloadingPdf, setIsDownloadingPdf] = useState(false);
 
 
   // State for card interactions
@@ -713,6 +723,68 @@ const ParticipantCompaniesManager: React.FC<Props> = ({ eventId }) => {
     );
   }, [vehicles, vehicleSearchTerm]);
 
+  const handleDownloadPdf = async () => {
+    setIsDownloadingPdf(true);
+    
+    try {
+        const doc = new jspdf.jsPDF();
+        doc.setFontSize(18);
+        doc.text(`Relatório de Empresas e Colaboradores`, 14, 22);
+        doc.setFontSize(11);
+        doc.setTextColor(100);
+        doc.text(`Gerado em: ${new Date().toLocaleString('pt-BR')}`, 14, 30);
+
+        const tableColumn = ["Empresa", "Código do Estande", "Colaborador", "Código do Colaborador"];
+        const tableRows: string[][] = [];
+
+        for (const company of filteredCompanies) {
+            try {
+                const collaborators = await getCollaboratorsByCompany(company.id);
+                if (collaborators.length > 0) {
+                    for (const collaborator of collaborators) {
+                        tableRows.push([
+                            company.name,
+                            company.boothCode,
+                            collaborator.name,
+                            collaborator.collaboratorCode
+                        ]);
+                    }
+                } else {
+                    tableRows.push([
+                        company.name,
+                        company.boothCode,
+                        'Nenhum colaborador cadastrado',
+                        ''
+                    ]);
+                }
+            } catch (error) {
+                 console.error(`Failed to fetch collaborators for company ${company.name}:`, error);
+                 tableRows.push([
+                    company.name,
+                    company.boothCode,
+                    'Erro ao buscar colaboradores',
+                    ''
+                ]);
+            }
+        }
+
+        doc.autoTable({
+            head: [tableColumn],
+            body: tableRows,
+            startY: 35,
+            theme: 'grid',
+            headStyles: { fillColor: [18, 181, 229] },
+        });
+        
+        doc.save(`relatorio_empresas_colaboradores.pdf`);
+    } catch (error) {
+        console.error("Failed to generate PDF:", error);
+    } finally {
+        setIsDownloadingPdf(false);
+    }
+  };
+
+
   if (loading) return <LoadingSpinner />;
 
   return (
@@ -721,6 +793,21 @@ const ParticipantCompaniesManager: React.FC<Props> = ({ eventId }) => {
         <h2 className="hidden md:block text-3xl font-bold">Gerenciar Empresas Participantes</h2>
         <div className="w-full md:w-auto flex flex-col sm:flex-row gap-4">
           <Input id="search" label="" placeholder="Buscar empresa..." value={searchTerm} onChange={e => setSearchTerm(e.target.value)} className="w-full sm:w-64 mb-0" />
+           <Button
+            variant="secondary"
+            onClick={handleDownloadPdf}
+            disabled={isDownloadingPdf}
+            className="flex-shrink-0 flex items-center justify-center"
+          >
+            {isDownloadingPdf ? (
+                'Gerando...'
+            ) : (
+                <>
+                    <DownloadIcon />
+                    Download PDF
+                </>
+            )}
+          </Button>
           <Button onClick={() => handleOpenModal()} className="flex-shrink-0">Adicionar Empresa</Button>
         </div>
       </div>
