@@ -1,7 +1,5 @@
 
 
-
-
 import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { 
@@ -30,7 +28,8 @@ import {
     getPendingTelaoRequestsForEvent,
     resolveTelaoRequest,
     getCollaboratorsByCompany,
-    sendTelaoNotification
+    sendTelaoNotification,
+    getDetailedSalesByEvent
 } from '../services/api';
 import { ReportButtonConfig, ReportType, Department, Staff, AssignedTask, ReportSubmission, ParticipantCompany, StaffActivity, Vehicle, StockMovement, CompanyCall, TelaoRequest, Collaborator } from '../types';
 import LoadingSpinner from '../components/LoadingSpinner';
@@ -68,6 +67,23 @@ const emptyVehicle: Omit<Vehicle, 'id' | 'createdAt'> = {
   status: 'Disponível'
 };
 
+interface DetailedSale {
+  marca: string;
+  model: string;
+  placa?: string;
+  updatedAt: string;
+  company: {
+    id: string;
+    name: string;
+    logoUrl?: string;
+  } | null;
+  collaborator: {
+    id: string;
+    name: string;
+    photoUrl?: string;
+    collaboratorCode: string;
+  } | null;
+}
 
 const InformesPage: React.FC = () => {
   const { boothCode } = useParams<{ boothCode: string }>();
@@ -176,6 +192,12 @@ const InformesPage: React.FC = () => {
   const [isCameraOpen, setIsCameraOpen] = useState(false);
   const videoRef = useRef<HTMLVideoElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
+
+    // State for Sold Vehicles Report
+    const [isSoldVehiclesModalOpen, setIsSoldVehiclesModalOpen] = useState(false);
+    const [soldVehicles, setSoldVehicles] = useState<DetailedSale[]>([]);
+    const [soldVehiclesLoading, setSoldVehiclesLoading] = useState(false);
+    const [soldVehiclesFilter, setSoldVehiclesFilter] = useState<'my_booth' | 'all_booths'>('my_booth');
 
   useEffect(() => {
     let eventIdForFetch: string | null = null;
@@ -1102,6 +1124,66 @@ const InformesPage: React.FC = () => {
         }
     };
 
+    // --- Sold Vehicles Report Handlers ---
+    const handleOpenSoldVehiclesModal = async () => {
+        if (!checkinInfo) return;
+        setIsSoldVehiclesModalOpen(true);
+        setSoldVehiclesLoading(true);
+        setSoldVehiclesFilter('my_booth');
+        try {
+            const data = await getDetailedSalesByEvent(checkinInfo.eventId);
+            setSoldVehicles(data);
+        } catch (error) {
+            console.error("Failed to fetch sold vehicles report", error);
+        } finally {
+            setSoldVehiclesLoading(false);
+        }
+    };
+    
+    const filteredSoldVehicles = useMemo(() => {
+        if (!checkinInfo) return [];
+        if (soldVehiclesFilter === 'all_booths') {
+            return soldVehicles;
+        }
+        return soldVehicles.filter(v => v.company?.id === checkinInfo.companyId);
+    }, [soldVehicles, soldVehiclesFilter, checkinInfo]);
+
+    const handleDownloadSoldVehiclesPdf = () => {
+        const doc = new (window as any).jspdf.jsPDF();
+        const filterText = soldVehiclesFilter === 'my_booth' ? checkinInfo?.companyName : 'Todos os Estandes';
+    
+        doc.setFontSize(18);
+        doc.text(`Relatório de Veículos Vendidos`, 14, 22);
+        doc.setFontSize(11);
+        doc.setTextColor(100);
+        doc.text(`Filtro: ${filterText}`, 14, 30);
+        doc.text(`Gerado em: ${new Date().toLocaleString('pt-BR')}`, 14, 38);
+    
+        const tableColumn = ["Veículo", "Placa", "Empresa", "Vendedor", "Data/Hora"];
+        const tableRows: string[][] = [];
+    
+        filteredSoldVehicles.forEach(sale => {
+            const saleData = [
+                `${sale.marca} ${sale.model}`,
+                sale.placa || 'N/D',
+                sale.company?.name || 'N/A',
+                sale.collaborator?.name || 'N/A',
+                new Date(sale.updatedAt).toLocaleString('pt-BR')
+            ];
+            tableRows.push(saleData);
+        });
+    
+        doc.autoTable({
+            head: [tableColumn],
+            body: tableRows,
+            startY: 45,
+            theme: 'grid',
+            headStyles: { fillColor: [18, 181, 229] },
+        });
+    
+        doc.save(`relatorio_veiculos_vendidos.pdf`);
+    };
+
 
   if (loading) return <LoadingSpinner />;
   if (error) return <p className="text-red-500 text-center">{error}</p>;
@@ -1158,6 +1240,9 @@ const InformesPage: React.FC = () => {
                       {pendingTelaoRequests.length}
                   </span>
               )}
+          </Button>
+          <Button onClick={handleOpenSoldVehiclesModal} className="w-full">
+            Relação de Veículos Vendidos
           </Button>
           {checkinInfo?.staffId && salesCheckinStaffIds.includes(checkinInfo.staffId) && (
               <Button onClick={openSalesCheckinModal} className="w-full">
@@ -1813,6 +1898,36 @@ const InformesPage: React.FC = () => {
           </div>
         </form>
       </Modal>
+
+      {/* Sold Vehicles Report Modal */}
+        <Modal isOpen={isSoldVehiclesModalOpen} onClose={() => setIsSoldVehiclesModalOpen(false)} title="Relação de Veículos Vendidos">
+            <div className="space-y-4">
+                <div className="flex flex-col sm:flex-row justify-between items-center gap-4">
+                    <div className="flex items-center p-1 bg-background rounded-lg w-full sm:w-auto">
+                        <Button onClick={() => setSoldVehiclesFilter('my_booth')} variant={soldVehiclesFilter === 'my_booth' ? 'primary' : 'secondary'} className={`w-1/2 sm:w-auto !rounded-r-none !transform-none ${soldVehiclesFilter !== 'my_booth' && 'bg-secondary'}`}>{checkinInfo?.companyName || 'Meu Estande'}</Button>
+                        <Button onClick={() => setSoldVehiclesFilter('all_booths')} variant={soldVehiclesFilter === 'all_booths' ? 'primary' : 'secondary'} className={`w-1/2 sm:w-auto !rounded-l-none !transform-none ${soldVehiclesFilter !== 'all_booths' && 'bg-secondary'}`}>Todos os Estandes</Button>
+                    </div>
+                    <Button onClick={handleDownloadSoldVehiclesPdf} variant="secondary" disabled={filteredSoldVehicles.length === 0}>Download PDF</Button>
+                </div>
+                <div className="space-y-3 max-h-[60vh] overflow-y-auto pr-2">
+                    {soldVehiclesLoading ? <LoadingSpinner /> : (
+                        filteredSoldVehicles.length > 0 ? filteredSoldVehicles.map((sale, index) => (
+                            <div key={index} className="p-3 bg-secondary rounded-lg">
+                                <div className="flex items-center gap-4">
+                                    <img src={sale.company?.logoUrl} alt={sale.company?.name} className="w-12 h-12 object-contain bg-white p-1 rounded-full"/>
+                                    <div>
+                                        <p className="font-bold text-primary">{sale.company?.name}</p>
+                                        <p className="text-sm">{sale.marca} {sale.model} - {sale.placa || 'S/ Placa'}</p>
+                                        <p className="text-xs text-text-secondary">Vendido por: {sale.collaborator?.name}</p>
+                                        <p className="text-xs text-text-secondary">{new Date(sale.updatedAt).toLocaleString('pt-BR')}</p>
+                                    </div>
+                                </div>
+                            </div>
+                        )) : <p className="text-center text-text-secondary py-8">Nenhuma venda encontrada para o filtro selecionado.</p>
+                    )}
+                </div>
+            </div>
+        </Modal>
 
       {/* Import Modal */}
       <Modal isOpen={isImportModalOpen} onClose={() => setIsImportModalOpen(false)} title="Importar Estoque via Planilha">
