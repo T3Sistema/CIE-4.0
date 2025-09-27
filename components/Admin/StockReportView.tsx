@@ -86,14 +86,20 @@ const StockReportView: React.FC<Props> = ({ eventId }) => {
         doc.text(`Empresa: ${selectedCompanyName}${dateText}`, 14, 30);
         doc.text(`Gerado em: ${new Date().toLocaleString('pt-BR')}`, 14, 38);
 
-        const tableColumn = ["Tipo", "Veículo", "Empresa", "Equipe", "Data/Hora"];
+        const tableColumn = ["Empresa", "Tipo", "Veículo", "Equipe", "Data/Hora"];
         const tableRows: string[][] = [];
 
-        filteredMovements.forEach(m => {
+        const sortedMovements = [...filteredMovements].sort((a, b) => {
+            const nameA = a.company?.name || '';
+            const nameB = b.company?.name || '';
+            return nameA.localeCompare(nameB);
+        });
+
+        sortedMovements.forEach(m => {
             const rowData = [
+                m.company?.name || 'N/D',
                 m.type,
                 `${m.vehicle?.marca || 'N/D'} - ${m.vehicle?.model || 'N/D'} (${m.vehicle?.placa || 'N/D'})`,
-                m.company?.name || 'N/D',
                 m.staff?.name || 'N/D',
                 new Date(m.timestamp).toLocaleString('pt-BR'),
             ];

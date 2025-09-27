@@ -1159,14 +1159,20 @@ const InformesPage: React.FC = () => {
         doc.text(`Filtro: ${filterText}`, 14, 30);
         doc.text(`Gerado em: ${new Date().toLocaleString('pt-BR')}`, 14, 38);
     
-        const tableColumn = ["Veículo", "Placa", "Empresa", "Vendedor", "Data/Hora"];
+        const tableColumn = ["Empresa", "Veículo", "Placa", "Vendedor", "Data/Hora"];
         const tableRows: string[][] = [];
+
+        const sortedSales = [...filteredSoldVehicles].sort((a, b) => {
+            const nameA = a.company?.name || '';
+            const nameB = b.company?.name || '';
+            return nameA.localeCompare(nameB);
+        });
     
-        filteredSoldVehicles.forEach(sale => {
+        sortedSales.forEach(sale => {
             const saleData = [
+                sale.company?.name || 'N/A',
                 `${sale.marca} ${sale.model}`,
                 sale.placa || 'N/D',
-                sale.company?.name || 'N/A',
                 sale.collaborator?.name || 'N/A',
                 new Date(sale.updatedAt).toLocaleString('pt-BR')
             ];
