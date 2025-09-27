@@ -19,6 +19,8 @@ import Button from '../Button';
 import LoadingSpinner from '../LoadingSpinner';
 import ConfirmationModal from '../ConfirmationModal';
 
+declare const jspdf: any;
+
 interface Props {
   eventId: string;
 }
@@ -26,6 +28,12 @@ interface Props {
 const emptyStaff: Omit<Staff, 'id'> = {
   name: '', personalCode: '', organizerCompanyId: '', photoUrl: '', phone: '', departmentId: '', role: ''
 };
+
+const DownloadIcon = () => (
+    <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4 mr-2" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+      <path strokeLinecap="round" strokeLinejoin="round" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
+    </svg>
+);
 
 const StaffManager: React.FC<Props> = ({ eventId }) => {
   const [staff, setStaff] = useState<Staff[]>([]);
@@ -233,6 +241,40 @@ const StaffManager: React.FC<Props> = ({ eventId }) => {
     return departments.find(d => d.id === departmentId)?.name || 'N/A';
   }
 
+  const handleDownloadPdf = () => {
+    const doc = new (window as any).jspdf.jsPDF();
+    
+    doc.setFontSize(18);
+    doc.text(`Relatório da Equipe`, 14, 22);
+    doc.setFontSize(11);
+    doc.setTextColor(100);
+    doc.text(`Gerado em: ${new Date().toLocaleString('pt-BR')}`, 14, 30);
+
+    const tableColumn = ["Nome", "Departamento", "Código Pessoal"];
+    const tableRows: string[][] = [];
+
+    const sortedStaff = [...staff].sort((a, b) => a.name.localeCompare(b.name));
+
+    sortedStaff.forEach(member => {
+        const memberData = [
+            member.name,
+            getDepartmentName(member.departmentId),
+            member.personalCode,
+        ];
+        tableRows.push(memberData);
+    });
+
+    doc.autoTable({
+        head: [tableColumn],
+        body: tableRows,
+        startY: 35,
+        theme: 'grid',
+        headStyles: { fillColor: [18, 181, 229] },
+    });
+
+    doc.save(`relatorio_equipe.pdf`);
+  };
+
   const staffAvailableToLink = useMemo(() => {
       const currentEventStaffIds = new Set(staff.map(s => s.id));
       return allOrganizerStaff.filter(s => !currentEventStaffIds.has(s.id));
@@ -350,6 +392,15 @@ const StaffManager: React.FC<Props> = ({ eventId }) => {
         <h2 className="hidden md:block text-3xl font-bold">Gerenciar Equipe Organizadora</h2>
         <div className="w-full md:w-auto flex flex-col sm:flex-row gap-4">
           <Input id="search" label="" placeholder="Buscar membro..." value={searchTerm} onChange={e => setSearchTerm(e.target.value)} className="w-full sm:w-64 mb-0" />
+          <Button
+            variant="secondary"
+            onClick={handleDownloadPdf}
+            disabled={staff.length === 0}
+            className="flex-shrink-0 flex items-center justify-center"
+          >
+            <DownloadIcon />
+            Download PDF
+          </Button>
           <Button onClick={handleOpenAddModal} className="flex-shrink-0" disabled={!organizer}>Adicionar Membro</Button>
         </div>
       </div>

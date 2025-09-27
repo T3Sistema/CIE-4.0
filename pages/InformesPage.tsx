@@ -139,8 +139,11 @@ const InformesPage: React.FC = () => {
   const [isTasksModalOpen, setIsTasksModalOpen] = useState(false);
   const [taskCompleting, setTaskCompleting] = useState<string | null>(null);
   
-  // State for Ranking Modal
+  // State for Ranking Modals
   const [isRankingModalOpen, setIsRankingModalOpen] = useState(false);
+  const [isRankingChoiceModalOpen, setIsRankingChoiceModalOpen] = useState(false);
+  const [isMyVisitsModalOpen, setIsMyVisitsModalOpen] = useState(false);
+  const [allStaffActivities, setAllStaffActivities] = useState<Record<string, StaffActivity[]>>({});
   const [allEventReports, setAllEventReports] = useState<ReportSubmission[]>([]);
   const [allEventCompanies, setAllEventCompanies] = useState<ParticipantCompany[]>([]);
   const [staffActivities, setStaffActivities] = useState<StaffActivity[]>([]);
@@ -199,6 +202,11 @@ const InformesPage: React.FC = () => {
     const [soldVehiclesLoading, setSoldVehiclesLoading] = useState(false);
     const [soldVehiclesFilter, setSoldVehiclesFilter] = useState<'my_booth' | 'all_booths'>('my_booth');
 
+  const hasSalesPermission = useMemo(() => {
+    if (!checkinInfo?.staffId) return false;
+    return salesCheckinStaffIds.includes(checkinInfo.staffId);
+  }, [checkinInfo, salesCheckinStaffIds]);
+
   useEffect(() => {
     let eventIdForFetch: string | null = null;
     let staffIdForFetch: string | null = null;
@@ -232,7 +240,7 @@ const InformesPage: React.FC = () => {
       if (!boothCode || !eventIdForFetch || !staffIdForFetch) return;
       try {
         setLoading(true);
-        const [companyButtons, allSystemButtons, depts, staff, tasks, reports, companies, activities] = await Promise.all([
+        const [companyButtons, allSystemButtons, depts, staff, tasks, reports, companies] = await Promise.all([
             getReportButtonsForBooth(boothCode),
             getButtonConfigs(),
             getDepartmentsByEvent(eventIdForFetch),
@@ -240,14 +248,24 @@ const InformesPage: React.FC = () => {
             getPendingTasksForStaff(staffIdForFetch, eventIdForFetch),
             getReportsByEvent(eventIdForFetch),
             getParticipantCompaniesByEvent(eventIdForFetch),
-            getStaffActivity(staffIdForFetch, eventIdForFetch)
         ]);
         setPendingTasks(tasks);
         setDepartments(depts);
         setAllStaff(staff);
         setAllEventReports(reports);
         setAllEventCompanies(companies);
-        setStaffActivities(activities);
+
+        if (staff.length > 0) {
+            const activityPromises = staff.map(s => getStaffActivity(s.id, eventIdForFetch!));
+            const activitiesData = await Promise.all(activityPromises);
+            const activitiesMap: Record<string, StaffActivity[]> = {};
+            staff.forEach((s, index) => {
+                activitiesMap[s.id] = activitiesData[index];
+            });
+            setAllStaffActivities(activitiesMap);
+            setStaffActivities(activitiesMap[staffIdForFetch] || []);
+        }
+
 
         const buttonsMap = new Map<string, ReportButtonConfig>();
         companyButtons.forEach(btn => buttonsMap.set(btn.id, btn));
@@ -294,6 +312,11 @@ const InformesPage: React.FC = () => {
   }, [checkinInfo]);
   
   useEffect(() => {
+    if (!hasSalesPermission) {
+        setPendingTelaoRequests([]);
+        return;
+    };
+
     const fetchTelaoRequests = async () => {
         if (checkinInfo?.eventId) {
             try {
@@ -308,7 +331,7 @@ const InformesPage: React.FC = () => {
     const intervalId = setInterval(fetchTelaoRequests, 15000);
 
     return () => clearInterval(intervalId);
-  }, [checkinInfo]);
+  }, [checkinInfo, hasSalesPermission]);
 
   const visibleButtons = useMemo(() => {
     if (!checkinInfo || !checkinInfo.staffId) return [];
@@ -344,11 +367,77 @@ const InformesPage: React.FC = () => {
       .sort((a, b) => b.value - a.value);
   }, [allEventReports, allEventCompanies]);
 
+  const staffRankingData = useMemo(() => {
+    return allStaff
+        .map(staffMember => ({
+            id: staffMember.id,
+            name: staffMember.name,
+            photoUrl: staffMember.photoUrl,
+            count: (allStaffActivities[staffMember.id] || []).filter(a => !a.description.startsWith('Tarefa atribuída:')).length
+        }))
+        .sort((a, b) => b.count - a.count);
+  }, [allStaff, allStaffActivities]);
+
   const totalActivitiesCount = useMemo(() => {
     if (!staffActivities) return 0;
     // Filter out "task assigned" activities, as they are not actions performed by the staff yet.
     return staffActivities.filter(a => !a.description.startsWith('Tarefa atribuída:')).length;
   }, [staffActivities]);
+
+    const myBoothsRanking = useMemo(() => {
+    if (!staffActivities || staffActivities.length === 0 || !allEventCompanies) {
+        return [];
+    }
+
+    const companyInfoMap = allEventCompanies.reduce((acc, company) => {
+        acc[company.boothCode] = { name: company.name, logoUrl: company.logoUrl };
+        return acc;
+    }, {} as Record<string, { name: string, logoUrl?: string }>);
+
+    const boothCodeRegex = /(?:para\s+([A-Z0-9]+)$|\(([A-Z0-9]+)\)$|\[([A-Z0-9]+)\]$)/;
+
+    const counts = staffActivities.reduce((acc, activity) => {
+        const match = activity.description.match(boothCodeRegex);
+        const boothCode = match ? match[1] || match[2] || match[3] : undefined;
+
+        if (boothCode && companyInfoMap[boothCode]) {
+            acc[boothCode] = (acc[boothCode] || 0) + 1;
+        }
+        return acc;
+    }, {} as Record<string, number>);
+
+    return Object.entries(counts)
+      .map(([boothCode, value]) => ({
+        label: companyInfoMap[boothCode]?.name || boothCode,
+        value,
+        logoUrl: companyInfoMap[boothCode]?.logoUrl,
+      }))
+      .sort((a, b) => b.value - a.value);
+
+    }, [staffActivities, allEventCompanies]);
+
+    const companyNameMap = useMemo(() => {
+        return allEventCompanies.reduce((acc, company) => {
+            acc[company.boothCode] = company.name;
+            return acc;
+        }, {} as Record<string, string>);
+    }, [allEventCompanies]);
+
+    const formatActivityDescription = useCallback((description: string): string => {
+        const parts = description.split(' para ');
+        if (parts.length > 1) {
+            const potentialBoothCode = parts[parts.length - 1].trim();
+            if (companyNameMap[potentialBoothCode]) {
+                return parts.slice(0, -1).join(' para ') + ' para ' + companyNameMap[potentialBoothCode];
+            }
+        }
+        const matchWithCode = description.match(/para (\w+)/);
+        if (matchWithCode && companyNameMap[matchWithCode[1]]) {
+            return description.replace(matchWithCode[1], companyNameMap[matchWithCode[1]]);
+        }
+
+        return description;
+    }, [companyNameMap]);
 
 
   // Effect to trigger webhook when all buttons are completed
@@ -1225,12 +1314,14 @@ const InformesPage: React.FC = () => {
                   </span>
               )}
           </Button>
-          <Button onClick={() => setIsRankingModalOpen(true)} className="w-full">
+          <Button onClick={() => setIsRankingChoiceModalOpen(true)} className="w-full">
             Ranking de Visitas
           </Button>
+          {hasSalesPermission && (
           <Button onClick={handleOpenVehicleModal} className="w-full">
               Estoque de Veículos
           </Button>
+          )}
           <Button onClick={handleOpenCallsModal} className="relative w-full">
               Chamados Abertos
               {pendingCompanyCalls.length > 0 && (
@@ -1239,6 +1330,7 @@ const InformesPage: React.FC = () => {
                   </span>
               )}
           </Button>
+          {hasSalesPermission && (
           <Button onClick={handleOpenTelaoModal} className="relative w-full">
               Solicitações de Telão
               {pendingTelaoRequests.length > 0 && (
@@ -1247,10 +1339,13 @@ const InformesPage: React.FC = () => {
                   </span>
               )}
           </Button>
+          )}
+          {hasSalesPermission && (
           <Button onClick={handleOpenSoldVehiclesModal} className="w-full">
             Relação de Veículos Vendidos
           </Button>
-          {checkinInfo?.staffId && salesCheckinStaffIds.includes(checkinInfo.staffId) && (
+          )}
+          {hasSalesPermission && (
               <Button onClick={openSalesCheckinModal} className="w-full">
                   Check-in de Vendas
               </Button>
@@ -1617,7 +1712,78 @@ const InformesPage: React.FC = () => {
         </div>
       </Modal>
       
-      {/* Ranking Modal */}
+        {/* Ranking Choice Modal */}
+        <Modal isOpen={isRankingChoiceModalOpen} onClose={() => setIsRankingChoiceModalOpen(false)} title="Ranking de Visitas">
+            <div className="flex flex-col gap-4">
+                <p className="text-center text-text-secondary">Selecione a visualização desejada:</p>
+                <Button
+                    onClick={() => {
+                        setIsRankingChoiceModalOpen(false);
+                        setIsMyVisitsModalOpen(true);
+                    }}
+                    className="w-full text-lg py-3"
+                >
+                    Minhas Atividades e Ranking
+                </Button>
+                <Button
+                    onClick={() => {
+                        setIsRankingChoiceModalOpen(false);
+                        setIsRankingModalOpen(true);
+                    }}
+                    variant="secondary"
+                    className="w-full text-lg py-3"
+                >
+                    Ranking Geral (Estandes)
+                </Button>
+            </div>
+        </Modal>
+
+        {/* My Visits Modal */}
+        <Modal isOpen={isMyVisitsModalOpen} onClose={() => setIsMyVisitsModalOpen(false)} title="Minhas Atividades e Ranking">
+            <div className="space-y-6">
+                <div className="text-center p-4 bg-secondary rounded-lg">
+                    <p className="text-sm font-semibold text-text-secondary">Total de Atividades</p>
+                    <p className="text-3xl font-bold text-primary">{totalActivitiesCount}</p>
+                </div>
+                <div>
+                    <h4 className="font-semibold mb-2 text-center">Ranking de Estandes Visitados</h4>
+                    <div className="space-y-2 max-h-80 overflow-y-auto pr-2 bg-background p-3 rounded-lg">
+                        {myBoothsRanking.length > 0 ? myBoothsRanking.map((item, index) => {
+                          const maxValue = myBoothsRanking[0]?.value || 0;
+                          return (
+                            <div key={index} className="flex items-center gap-4 group w-full p-2">
+                              <span className="text-right font-semibold text-text-secondary w-10">{index + 1}º</span>
+                              <img 
+                                src={item.logoUrl || 'https://via.placeholder.com/150?text=Logo'} 
+                                alt={`${item.label} logo`} 
+                                className="w-8 h-8 rounded-full object-contain bg-white flex-shrink-0"
+                              />
+                              <div className="flex-1 overflow-hidden">
+                                <div className="flex justify-between items-center mb-1">
+                                  <p className="text-sm font-medium text-text truncate pr-2" title={item.label}>{item.label}</p>
+                                  <div className="flex items-center">
+                                    <p className="text-sm font-bold text-primary">{item.value}</p>
+                                    {index < 3 && <MedalIcon position={index + 1} />}
+                                  </div>
+                                </div>
+                                <div className="w-full bg-secondary rounded-full h-4 overflow-hidden">
+                                  <div
+                                    className="bg-primary h-4 rounded-full transition-all duration-500 ease-out"
+                                    style={{ width: `${maxValue > 0 ? (item.value / maxValue) * 100 : 0}%` }}
+                                  ></div>
+                                </div>
+                              </div>
+                            </div>
+                          );
+                        }) : (
+                            <p className="text-center text-text-secondary py-4">Nenhuma atividade em estandes registrada.</p>
+                        )}
+                    </div>
+                </div>
+            </div>
+        </Modal>
+      
+      {/* Overall Ranking Modal */}
       <Modal isOpen={isRankingModalOpen} onClose={() => setIsRankingModalOpen(false)} title="Ranking de Visitas por Estande">
         <div className="space-y-2 max-h-[60vh] overflow-y-auto">
           {rankingData.length > 0 ? (
